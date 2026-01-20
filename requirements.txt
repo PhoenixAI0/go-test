@@ -1,0 +1,23 @@
+# Core ML dependencies
+torch>=2.4.0
+transformers>=4.45.0
+datasets>=3.0.0
+trl>=0.11.0
+accelerate>=0.34.0
+
+# Unsloth for efficient training
+unsloth[colab-new]@git+https://github.com/unslothai/unsloth.git
+
+# Go-specific dependencies
+sgfmill>=1.1.1
+
+# Config and utilities
+pyyaml>=6.0.1
+requests>=2.31.0
+
+# Logging and tracking (optional)
+wandb>=0.18.0
+
+# Development
+pytest>=8.0.0
+ruff>=0.6.0

@@ -1,0 +1,35 @@
+dataset: data/rl_prompts_19x19.jsonl
+training:
+  model_name: qwen-3-8b
+  output_dir: outputs/grpo_19x19
+  log_dir: logs/grpo_19x19
+  max_seq_length: 4096
+  batch_size: 1
+  gradient_accumulation: 8
+  learning_rate: 1e-5
+  num_steps: 4000
+  seed: 3407
+  lora_rank: 64
+  use_lora: true
+katago:
+  binary_path: ${KATAGO_BIN}
+  model_path: ${KATAGO_MODEL}
+  config_path: ${KATAGO_CONFIG}
+  board_size: 19
+  rules: chinese
+  komi: 7.5
+reward:
+  winrate_scale: 1.0
+  legal_bonus: 0.2
+  illegal_penalty: -1.0
+  length_penalty: -0.05
+  full_game_bonus: 0.5
+  strict_legality: false
+rollout:
+  num_samples: 8
+  temperature: 1.0
+  top_p: 0.9
+  max_tokens: 4
+  stop_at_pass: true
+notes:
+  promotion_gate: Train 19x19 after the 9x9 promotion gate is met.

@@ -1,0 +1,8 @@
+dataset_path: data/sft_9x9.jsonl
+model_name: qwen-3-8b
+output_dir: outputs/sft_warm_start
+log_dir: logs/sft_warm_start
+max_seq_length: 1024
+epochs: 1
+batch_size: 4
+learning_rate: 5e-5

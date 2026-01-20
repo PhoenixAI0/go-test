@@ -1,0 +1,150 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "=========================================="
+echo "Go RL Training Environment Setup"
+echo "=========================================="
+
+# Colors for output
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# Check if running on Linux
+if [[ "$OSTYPE" != "linux-gnu"* ]]; then
+    echo -e "${YELLOW}Warning: This script is optimized for Linux. Some features may not work on other systems.${NC}"
+fi
+
+# Check for NVIDIA GPU
+if ! command -v nvidia-smi &> /dev/null; then
+    echo -e "${RED}Error: nvidia-smi not found. This training requires an NVIDIA GPU.${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ NVIDIA GPU detected${NC}"
+nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+
+# Install uv if not present
+if ! command -v uv &> /dev/null; then
+    echo -e "${YELLOW}Installing uv package manager...${NC}"
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.cargo/bin:$PATH"
+fi
+
+echo -e "${GREEN}✓ uv is installed${NC}"
+uv --version
+
+# Create virtual environment
+echo -e "${YELLOW}Creating virtual environment...${NC}"
+uv venv .venv --python 3.11
+
+# Activate virtual environment
+source .venv/bin/activate
+
+# Install PyTorch first (GPU version)
+echo -e "${YELLOW}Installing PyTorch with CUDA support...${NC}"
+uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Verify PyTorch installation
+python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}')"
+
+if ! python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+    echo -e "${RED}Error: PyTorch CUDA not available. Please check your CUDA installation.${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ PyTorch with CUDA installed successfully${NC}"
+
+# Install other dependencies
+echo -e "${YELLOW}Installing project dependencies...${NC}"
+uv pip install -r requirements.txt
+
+# Install go_rl package in editable mode
+echo -e "${YELLOW}Installing go_rl package...${NC}"
+uv pip install -e .
+
+# Create necessary directories
+echo -e "${YELLOW}Creating directory structure...${NC}"
+mkdir -p data/sgf_9x9
+mkdir -p data/sgf_19x19
+mkdir -p outputs
+mkdir -p logs
+
+echo -e "${GREEN}✓ Directories created${NC}"
+
+# Download and install KataGo
+echo -e "${YELLOW}Setting up KataGo...${NC}"
+KATAGO_VERSION="1.15.3"
+KATAGO_DIR="$HOME/katago"
+
+if [ ! -d "$KATAGO_DIR" ]; then
+    mkdir -p "$KATAGO_DIR"
+    cd "$KATAGO_DIR"
+    
+    # Download KataGo binary
+    echo "Downloading KataGo v${KATAGO_VERSION}..."
+    wget -q https://github.com/lightvector/KataGo/releases/download/v${KATAGO_VERSION}/katago-v${KATAGO_VERSION}-cuda11.8-linux-x64.zip
+    unzip -q katago-v${KATAGO_VERSION}-cuda11.8-linux-x64.zip
+    chmod +x katago
+    
+    # Download a neural network model (b18c384nbt is good for 9x9 and 19x19)
+    echo "Downloading KataGo neural network model..."
+    wget -q https://media.katagotraining.org/uploaded/networks/models/kata1/kata1-b18c384nbt-s7709731328-d3715293823.bin.gz
+    
+    # Create analysis config
+    cat > analysis.cfg << 'EOF'
+# KataGo Analysis Config
+numSearchThreads = 8
+nnCacheSizePowerOfTwo = 21
+nnMutexPoolSizePowerOfTwo = 16
+numNNServerThreadsPerModel = 2
+nnMaxBatchSize = 16
+maxVisits = 100
+maxPlayouts = 300
+EOF
+    
+    cd -
+    echo -e "${GREEN}✓ KataGo installed to ${KATAGO_DIR}${NC}"
+else
+    echo -e "${GREEN}✓ KataGo already installed at ${KATAGO_DIR}${NC}"
+fi
+
+# Create .env file for KataGo paths
+cat > .env << EOF
+# KataGo Configuration
+export KATAGO_BIN="${KATAGO_DIR}/katago"
+export KATAGO_MODEL="${KATAGO_DIR}/kata1-b18c384nbt-s7709731328-d3715293823.bin.gz"
+export KATAGO_CONFIG="${KATAGO_DIR}/analysis.cfg"
+EOF
+
+echo -e "${GREEN}✓ Environment variables written to .env${NC}"
+
+# Source the environment variables
+source .env
+
+# Test KataGo
+echo -e "${YELLOW}Testing KataGo installation...${NC}"
+if $KATAGO_BIN version &> /dev/null; then
+    echo -e "${GREEN}✓ KataGo is working${NC}"
+    $KATAGO_BIN version
+else
+    echo -e "${RED}Error: KataGo test failed${NC}"
+    exit 1
+fi
+
+echo ""
+echo -e "${GREEN}=========================================="
+echo "Setup Complete!"
+echo "==========================================${NC}"
+echo ""
+echo "Next steps:"
+echo "1. Add SGF files to data/sgf_9x9/ or data/sgf_19x19/"
+echo "2. Run: ./prepare_data.sh"
+echo "3. Run: ./train_sft.sh (for supervised fine-tuning)"
+echo "4. Run: ./train_grpo.sh (for RL training)"
+echo ""
+echo "To activate the environment in the future:"
+echo "  source .venv/bin/activate"
+echo "  source .env"
+echo ""
