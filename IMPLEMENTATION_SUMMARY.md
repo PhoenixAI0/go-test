@@ -26,7 +26,7 @@ Qwen-3-8B model downloading is fully automated:
 # In scripts/run_sft.py and scripts/run_grpo.py
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name="qwen-3-8b",  # Auto-downloads from HuggingFace
-    load_in_4bit=True,
+    load_in_8bit=True,
 )
 ```
 
@@ -164,7 +164,7 @@ This will install everything automatically (~10-15 minutes).
 
 1. ✅ **Complete training pipeline** - SFT and GRPO both implemented
 2. ✅ **Data preparation** - SGF parsing and dataset building
-3. ✅ **Model integration** - Unsloth with 4-bit quantization
+3. ✅ **Model integration** - Unsloth with 8-bit quantization
 4. ✅ **Reward system** - KataGo analysis for move evaluation
 5. ✅ **Configuration** - YAML configs for 9x9 and 19x19
 6. ✅ **Logging** - JSON run logs with versioning

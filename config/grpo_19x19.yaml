@@ -16,6 +16,7 @@ training:
   grpo_mini_batch: 1
   grpo_logit_chunk_multiplier: 8
   use_8bit_optimizer: true
+  quantization_bits: 8
 katago:
   binary_path: ${KATAGO_BIN}
   model_path: ${KATAGO_MODEL}

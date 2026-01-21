@@ -11,4 +11,5 @@ lora_alpha: 16
 lora_dropout: 0.0
 use_packing: true
 use_8bit_optimizer: true
+quantization_bits: 8
 seed: 3407

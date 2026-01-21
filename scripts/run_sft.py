@@ -9,6 +9,11 @@ from typing import Dict
 from go_rl.config import SftConfig, load_config
 from go_rl.logging_utils import setup_logging
 from go_rl.run_logging import write_run_log
+from go_rl.training_utils import (
+    configure_torch_for_speed,
+    default_num_workers,
+    quantization_kwargs,
+)
 from go_rl.wandb_utils import configure_wandb
 
 logger = logging.getLogger(__name__)
@@ -56,6 +61,7 @@ def main() -> None:
         from unsloth import FastLanguageModel
     except ImportError as exc:
         raise RuntimeError("Missing dependencies for SFT training.") from exc
+    configure_torch_for_speed()
 
     run_name = f"sft_{Path(args.config).stem}"
     wandb_enabled = configure_wandb(
@@ -71,7 +77,7 @@ def main() -> None:
         model_name=cfg.model_name,
         max_seq_length=cfg.max_seq_length,
         dtype=None,
-        load_in_4bit=True,
+        **quantization_kwargs(cfg.quantization_bits),
     )
 
     # Apply LoRA with optimized parameters
@@ -116,6 +122,7 @@ def main() -> None:
     )
     logger.info("Wrote run log to %s", log_path)
     logger.info("Starting SFT training run %s", run_name)
+    num_workers = default_num_workers()
     trainer_args = {
         "output_dir": cfg.output_dir,
         "num_train_epochs": 1 if args.smoke else cfg.epochs,
@@ -124,7 +131,9 @@ def main() -> None:
         "max_seq_length": cfg.max_seq_length,
         "logging_steps": 1 if args.smoke else 10,
         "max_steps": 1 if args.smoke else -1,
-        "dataset_num_proc": 2,
+        "dataset_num_proc": num_workers,
+        "dataloader_num_workers": num_workers,
+        "dataloader_pin_memory": True,
     }
     # Packing optimization: 3-5x speedup
     if cfg.use_packing:

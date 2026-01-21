@@ -69,10 +69,15 @@ class TrainingConfig:
     grpo_mini_batch: Optional[int] = 1
     grpo_logit_chunk_multiplier: Optional[int] = 4
     use_8bit_optimizer: bool = True
+    quantization_bits: int = 8
 
     def __post_init__(self) -> None:
         self.output_dir = _expand_path(self.output_dir)
         self.log_dir = _expand_path(self.log_dir)
+        if self.quantization_bits not in (0, 4, 8, 16, 32):
+            raise ValueError(
+                "quantization_bits must be one of 0, 4, 8, 16, or 32."
+            )
 
 
 @dataclass
@@ -90,12 +95,17 @@ class SftConfig:
     lora_dropout: float = 0.0
     use_packing: bool = True
     use_8bit_optimizer: bool = True
+    quantization_bits: int = 8
     seed: int = 3407
 
     def __post_init__(self) -> None:
         self.dataset_path = _expand_path(self.dataset_path)
         self.output_dir = _expand_path(self.output_dir)
         self.log_dir = _expand_path(self.log_dir)
+        if self.quantization_bits not in (0, 4, 8, 16, 32):
+            raise ValueError(
+                "quantization_bits must be one of 0, 4, 8, 16, or 32."
+            )
 
 
 def _load_yaml(path: str) -> Dict[str, Any]:

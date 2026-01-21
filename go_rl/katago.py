@@ -23,8 +23,9 @@ class KataGoAnalysisClient:
     def __init__(self, config: KataGoConfig) -> None:
         self.config = config
         self._process: Optional[subprocess.Popen[str]] = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._next_id = 1
+        self._stderr_thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
         if self._process is not None:
@@ -47,48 +48,78 @@ class KataGoAnalysisClient:
             text=True,
             bufsize=1,
         )
+        if self._process.stderr is not None:
+            self._stderr_thread = threading.Thread(
+                target=self._drain_stderr, daemon=True
+            )
+            self._stderr_thread.start()
 
     def close(self) -> None:
-        if self._process:
-            logger.info("Stopping KataGo analysis process")
-            self._process.terminate()
-            self._process = None
+        if not self._process:
+            return
+        logger.info("Stopping KataGo analysis process")
+        process = self._process
+        self._process = None
+        try:
+            process.terminate()
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        finally:
+            if process.stdin:
+                process.stdin.close()
+            if process.stdout:
+                process.stdout.close()
+            if process.stderr:
+                process.stderr.close()
+        if self._stderr_thread:
+            self._stderr_thread.join(timeout=1)
+            self._stderr_thread = None
+
+    def _drain_stderr(self) -> None:
+        process = self._process
+        if process is None or process.stderr is None:
+            return
+        for line in process.stderr:
+            logger.debug("KataGo stderr: %s", line.rstrip())
 
     def _send(self, payload: Dict[str, object]) -> Dict[str, object]:
         if self._process is None:
             raise RuntimeError("KataGo process not started.")
         if self._process.stdin is None or self._process.stdout is None:
             raise RuntimeError("KataGo process streams are unavailable.")
-        logger.debug("Sending KataGo request id=%s", payload.get("id"))
-        self._process.stdin.write(json.dumps(payload) + "\n")
-        self._process.stdin.flush()
-        response = self._process.stdout.readline()
-        if not response:
-            raise RuntimeError("KataGo returned empty response.")
-        logger.debug("Received KataGo response id=%s", payload.get("id"))
-        return json.loads(response)
+        with self._lock:
+            logger.debug("Sending KataGo request id=%s", payload.get("id"))
+            self._process.stdin.write(json.dumps(payload) + "\n")
+            self._process.stdin.flush()
+            response = self._process.stdout.readline()
+            if not response:
+                raise RuntimeError("KataGo returned empty response.")
+            logger.debug("Received KataGo response id=%s", payload.get("id"))
+            return json.loads(response)
 
     def analyze_position(self, board: BoardState) -> KataGoResult:
-        payload = {
-            "id": self._next_id,
-            "boardXSize": board.size,
-            "boardYSize": board.size,
-            "rules": self.config.rules,
-            "komi": self.config.komi,
-            "moves": [
-                [player.lower(), coords_to_gtp(coords, board.size).lower()]
-                if coords is not None
-                else [player.lower(), "pass"]
-                for player, coords in board.moves
-            ],
-        }
-        self._next_id += 1
-        logger.debug(
-            "Analyzing position id=%d with %d moves",
-            payload["id"],
-            len(board.moves),
-        )
-        result = self._send(payload)
+        with self._lock:
+            payload = {
+                "id": self._next_id,
+                "boardXSize": board.size,
+                "boardYSize": board.size,
+                "rules": self.config.rules,
+                "komi": self.config.komi,
+                "moves": [
+                    [player.lower(), coords_to_gtp(coords, board.size).lower()]
+                    if coords is not None
+                    else [player.lower(), "pass"]
+                    for player, coords in board.moves
+                ],
+            }
+            self._next_id += 1
+            logger.debug(
+                "Analyzing position id=%d with %d moves",
+                payload["id"],
+                len(board.moves),
+            )
+            result = self._send(payload)
         winrate = _extract_winrate(result)
         return KataGoResult(winrate=winrate, raw=result)
 

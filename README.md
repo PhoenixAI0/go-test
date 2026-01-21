@@ -158,7 +158,7 @@ python scripts/check_gpu_setup.py
 
 **Requirements:**
 - Homogeneous GPUs recommended (same model/memory)
-- Works with Unsloth's 4-bit quantization
+- Works with Unsloth's 8-bit quantization
 - FSDP not supported (Unsloth limitation)
 
 See [Multi-GPU Guide](docs/MULTI_GPU_GUIDE.md) for detailed usage, performance tuning, and troubleshooting.

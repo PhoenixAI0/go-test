@@ -15,6 +15,11 @@ from go_rl.prompting import parse_prompt
 from go_rl.rewards import evaluate_move
 from go_rl.rollout import normalize_move
 from go_rl.run_logging import write_run_log
+from go_rl.training_utils import (
+    configure_torch_for_speed,
+    default_num_workers,
+    quantization_kwargs,
+)
 from go_rl.wandb_utils import configure_wandb
 
 logger = logging.getLogger(__name__)
@@ -35,6 +40,7 @@ def load_yaml(path: str) -> Dict[str, object]:
 def build_reward_fn(
     katago: KataGoAnalysisClient,
     reward_cfg: RewardConfig,
+    rollout_cfg: RolloutConfig,
 ) -> callable:
     def winrate_for_player(
         winrate: float, to_move: str, player: str
@@ -61,7 +67,16 @@ def build_reward_fn(
             base_winrate = winrate_for_player(
                 base_analysis.winrate, player, player
             )
-            move = normalize_move(completion)
+            try:
+                move = normalize_move(
+                    completion, stop_at_pass=rollout_cfg.stop_at_pass
+                )
+            except Exception:
+                breakdown = evaluate_move(
+                    board, completion, 0.0, reward_cfg, player=player
+                )
+                rewards.append(breakdown.total)
+                continue
             try:
                 coords = gtp_to_coords(move, board.size)
                 valid_coords = True
@@ -158,6 +173,7 @@ def main() -> None:
         from unsloth import FastLanguageModel
     except ImportError as exc:
         raise RuntimeError("Missing dependencies for GRPO training.") from exc
+    configure_torch_for_speed()
 
     run_name = f"grpo_{Path(args.config).stem}"
     wandb_enabled = configure_wandb(
@@ -173,7 +189,7 @@ def main() -> None:
         model_name=train_cfg.model_name,
         max_seq_length=train_cfg.max_seq_length,
         dtype=None,
-        load_in_4bit=train_cfg.use_lora,
+        **quantization_kwargs(train_cfg.quantization_bits),
         fast_inference=True,
     )
 
@@ -242,6 +258,7 @@ def main() -> None:
     )
     logger.info("Wrote run log to %s", log_path)
     logger.info("Starting GRPO training run %s", run_name)
+    num_workers = default_num_workers()
     trainer_args = {
         "output_dir": train_cfg.output_dir,
         "max_seq_length": train_cfg.max_seq_length,
@@ -254,7 +271,11 @@ def main() -> None:
         "top_p": rollout_cfg.top_p,
         "max_completion_length": rollout_cfg.max_tokens,
         "logging_steps": 1 if args.smoke else 10,
+        "dataloader_num_workers": num_workers,
+        "dataloader_pin_memory": True,
     }
+    max_steps = 1 if args.smoke else train_cfg.num_steps
+    trainer_args["max_steps"] = max_steps if max_steps > 0 else -1
     # GRPO-specific Unsloth optimizations (saves ~5GB VRAM)
     if train_cfg.grpo_mini_batch is not None:
         trainer_args["unsloth_grpo_mini_batch"] = train_cfg.grpo_mini_batch
@@ -273,7 +294,7 @@ def main() -> None:
     trainer = GRPOTrainer(
         model=model,
         tokenizer=tokenizer,
-        reward_funcs=build_reward_fn(katago, reward_cfg),
+        reward_funcs=build_reward_fn(katago, reward_cfg, rollout_cfg),
         train_dataset=dataset,
         args=GRPOConfig(**trainer_args),
     )

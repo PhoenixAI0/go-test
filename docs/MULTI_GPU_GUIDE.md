@@ -29,13 +29,13 @@ This codebase supports multi-GPU training using **Distributed Data Parallel (DDP
 
 ### Unsloth Compatibility
 
-This codebase uses **Unsloth** for efficient fine-tuning with 4-bit quantization. Key points:
+This codebase uses **Unsloth** for efficient fine-tuning with 8-bit quantization. Key points:
 
-- ✅ **DDP is fully supported** with Unsloth's 4-bit quantization
+- ✅ **DDP is fully supported** with Unsloth's 8-bit quantization
 - ❌ **FSDP is NOT supported** by Unsloth (as of 2026)
 - ⚠️ **Device map conflicts**: Don't use `device_map="balanced"` with DDP
 
-The good news: Unsloth's 4-bit quantization is so memory-efficient that DDP works well even for 8B parameter models on 24GB GPUs.
+The good news: Unsloth's 8-bit quantization is still memory-efficient, so DDP remains practical for 8B parameter models on 24GB GPUs with reasonable sequence lengths and batch sizes.
 
 ## Quick Start
 
@@ -385,8 +385,8 @@ python scripts/eval_elo.py --checkpoint outputs/sft_warm_start
 **However:** Unsloth doesn't support FSDP as of 2026.
 
 **Why it's okay:**
-- Unsloth's 4-bit quantization provides excellent memory efficiency
-- Qwen-3-8B fits comfortably on 24GB GPUs with 4-bit quantization
+- Unsloth's 8-bit quantization balances speed and memory efficiency
+- Qwen-3-8B fits on 24GB GPUs with 8-bit quantization in common configs (adjust batch size/seq length as needed)
 - DDP provides near-linear speedup for this model size
 
 **Future:** If Unsloth adds FSDP support, we can add configurations for it.

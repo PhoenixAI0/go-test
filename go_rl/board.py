@@ -184,7 +184,7 @@ class BoardState:
             previous = _copy_board(board)
             if coords is None:
                 continue
-            color = _STONE.get(player)
+            color = _STONE.get(player.upper())
             if color is None:
                 raise ValueError(f"Unknown player: {player}")
             board = _apply_strict_move(board, color, coords)

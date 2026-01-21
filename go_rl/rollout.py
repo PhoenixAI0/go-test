@@ -46,9 +46,13 @@ class VllmHttpClient:
         return outputs
 
 
-def normalize_move(output: str) -> str:
+def normalize_move(output: str, stop_at_pass: bool = False) -> str:
     stripped = output.strip()
     if not stripped:
         raise GtpParseError("Empty model output")
-    move = stripped.split()[0]
-    return move.upper()
+    tokens = stripped.split()
+    if stop_at_pass:
+        for token in tokens:
+            if token.upper() == "PASS":
+                return "PASS"
+    return tokens[0].upper()
