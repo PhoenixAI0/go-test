@@ -22,9 +22,10 @@ This codebase supports multi-GPU training using **Distributed Data Parallel (DDP
 
 ### Supported Configurations
 
-- **DDP with 2 GPUs** (`ddp-2`): 2x speedup
-- **DDP with 4 GPUs** (`ddp-4`): 4x speedup
-- **DDP with 8 GPUs** (`ddp-8`): 8x speedup
+- **DDP with 2 GPUs** (`--multi-gpu 2`): 2x speedup
+- **DDP with 4 GPUs** (`--multi-gpu 4`): 4x speedup
+- **DDP with 8 GPUs** (`--multi-gpu 8`): 8x speedup
+- **Auto-detect** (`--multi-gpu auto`): Uses all visible GPUs
 
 ### Unsloth Compatibility
 
@@ -52,13 +53,16 @@ python scripts/check_gpu_setup.py
 
 ```bash
 # SFT Training with 4 GPUs
-./train_sft.sh --multi-gpu ddp-4
+./train_sft.sh --multi-gpu 4
 
 # GRPO Training with 2 GPUs
-./train_grpo.sh --multi-gpu ddp-2
+./train_grpo.sh --multi-gpu 2
 
 # With gradient checkpointing for memory efficiency
-./train_sft.sh --multi-gpu ddp-4 --gradient-checkpointing
+./train_sft.sh --multi-gpu 4 --gradient-checkpointing
+
+# Auto-detect GPU count
+./train_sft.sh --multi-gpu auto
 ```
 
 ### Single GPU (Default)
@@ -159,7 +163,7 @@ gradient_accumulation: 2  # Effective: 1 × 2 × 4 = 8 (same total)
 Gradient checkpointing trades compute for memory:
 
 ```bash
-./train_sft.sh --multi-gpu ddp-4 --gradient-checkpointing
+./train_sft.sh --multi-gpu 4 --gradient-checkpointing
 ```
 
 **Trade-offs:**
@@ -193,7 +197,7 @@ RuntimeError: CUDA out of memory
 **Solutions:**
 1. **Enable gradient checkpointing:**
    ```bash
-   ./train_sft.sh --multi-gpu ddp-4 --gradient-checkpointing
+   ./train_sft.sh --multi-gpu 4 --gradient-checkpointing
    ```
 
 2. **Reduce batch size:**
@@ -218,7 +222,7 @@ RuntimeError: NCCL operation timed out
 1. **Increase timeout:**
    ```bash
    export NCCL_TIMEOUT=3600  # 1 hour
-   ./train_sft.sh --multi-gpu ddp-4
+   ./train_sft.sh --multi-gpu 4
    ```
 
 2. **Check GPU communication:**
@@ -277,7 +281,7 @@ In multi-GPU GRPO training, only the main process (rank 0) runs KataGo. If you s
 ```bash
 # Use only GPUs 0 and 1
 export CUDA_VISIBLE_DEVICES=0,1
-./train_sft.sh --multi-gpu ddp-2
+./train_sft.sh --multi-gpu 2
 ```
 
 ## Advanced Configuration
@@ -337,7 +341,7 @@ watch -n 1 nvidia-smi
 
 **Weights & Biases:**
 ```bash
-./train_sft.sh --multi-gpu ddp-4 --wandb --wandb-project my-go-rl
+./train_sft.sh --multi-gpu 4 --wandb --wandb-project my-go-rl
 ```
 
 **TensorBoard (future):**
@@ -355,7 +359,7 @@ output_dir: outputs/sft_warm_start  # Saved by rank 0
 Loading checkpoints works seamlessly across single and multi-GPU:
 ```bash
 # Train with 4 GPUs
-./train_sft.sh --multi-gpu ddp-4
+./train_sft.sh --multi-gpu 4
 
 # Resume or inference with 1 GPU
 python scripts/eval_elo.py --checkpoint outputs/sft_warm_start

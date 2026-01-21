@@ -59,7 +59,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --wandb-project NAME Set W&B project name (default: go-rl)"
             echo "  --board-size SIZE    Board size: 9x9 or 19x19 (default: 9x9)"
             echo "  --debug              Enable debug logging"
-            echo "  --multi-gpu MODE     Multi-GPU mode: ddp-2, ddp-4, ddp-8"
+            echo "  --multi-gpu N        Number of GPUs (1-8; supported: 1, 2, 4, 8)"
+            echo "  --multi-gpu auto     Auto-detect GPU count"
             echo "  --gradient-checkpointing  Enable gradient checkpointing"
             echo "  -h, --help           Show this help message"
             exit 0
@@ -137,15 +138,44 @@ if [ -z "$MULTI_GPU" ]; then
     # Single GPU mode (backward compatible)
     CMD="python scripts/run_grpo.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
 else
+    if [ "$MULTI_GPU" = "auto" ]; then
+        if command -v nvidia-smi &>/dev/null; then
+            MULTI_GPU=$(nvidia-smi --list-gpus | wc -l | tr -d ' ')
+        else
+            MULTI_GPU=$(python -c "import torch; print(torch.cuda.device_count())" 2>/dev/null || echo 0)
+        fi
+        if [ "$MULTI_GPU" -eq 0 ]; then
+            echo -e "${RED}Error: Auto-detect found no GPUs${NC}"
+            echo "Install NVIDIA drivers or pass --multi-gpu with an explicit count"
+            exit 1
+        fi
+    fi
+
+    if ! [[ "$MULTI_GPU" =~ ^[1-8]$ ]]; then
+        echo -e "${RED}Error: Invalid --multi-gpu value: $MULTI_GPU${NC}"
+        echo "Expected a number from 1-8 or 'auto' (supported counts: 1, 2, 4, 8)"
+        exit 1
+    fi
+
     # Multi-GPU mode with accelerate
-    ACCELERATE_CONFIG="config/accelerate/${MULTI_GPU}.yaml"
+    case "$MULTI_GPU" in
+        1) ACCELERATE_CONFIG="config/accelerate/single_gpu.yaml" ;;
+        2) ACCELERATE_CONFIG="config/accelerate/ddp_2gpu.yaml" ;;
+        4) ACCELERATE_CONFIG="config/accelerate/ddp_4gpu.yaml" ;;
+        8) ACCELERATE_CONFIG="config/accelerate/ddp_8gpu.yaml" ;;
+        *)
+            echo -e "${RED}Error: Unsupported GPU count: $MULTI_GPU${NC}"
+            echo "Supported counts: 1, 2, 4, 8"
+            exit 1
+            ;;
+    esac
+
     if [ ! -f "$ACCELERATE_CONFIG" ]; then
         echo -e "${RED}Error: Accelerate config not found: $ACCELERATE_CONFIG${NC}"
-        echo "Valid options: ddp-2, ddp-4, ddp-8"
         exit 1
     fi
     CMD="accelerate launch --config_file=$ACCELERATE_CONFIG scripts/run_grpo.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
-    echo -e "${GREEN}Multi-GPU training enabled: $MULTI_GPU${NC}"
+    echo -e "${GREEN}Multi-GPU training enabled: ${MULTI_GPU} GPU(s)${NC}"
 fi
 
 if [ "$GRADIENT_CHECKPOINTING" = true ]; then

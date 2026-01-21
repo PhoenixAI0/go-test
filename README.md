@@ -57,8 +57,9 @@ Training helpers:
 
 Multi-GPU examples:
 ```bash
-./train_sft.sh --multi-gpu ddp-4 --gradient-checkpointing
-./train_grpo.sh --multi-gpu ddp-4
+./train_sft.sh --multi-gpu 4 --gradient-checkpointing
+./train_grpo.sh --multi-gpu 4
+./train_sft.sh --multi-gpu auto
 ```
 
 Full pipeline:
@@ -142,15 +143,15 @@ nvidia-smi
 python scripts/check_gpu_setup.py
 
 # SFT Training with multiple GPUs
-./train_sft.sh --multi-gpu ddp-2    # 2 GPUs
-./train_sft.sh --multi-gpu ddp-4    # 4 GPUs
-./train_sft.sh --multi-gpu ddp-8    # 8 GPUs
+./train_sft.sh --multi-gpu 2    # 2 GPUs
+./train_sft.sh --multi-gpu 4    # 4 GPUs
+./train_sft.sh --multi-gpu 8    # 8 GPUs
 
 # GRPO Training with multiple GPUs
-./train_grpo.sh --multi-gpu ddp-4
+./train_grpo.sh --multi-gpu 4
 
 # With gradient checkpointing for memory efficiency
-./train_sft.sh --multi-gpu ddp-4 --gradient-checkpointing
+./train_sft.sh --multi-gpu 4 --gradient-checkpointing
 ```
 
 **Performance:** Near-linear speedup (2 GPUs ≈ 2x faster, 4 GPUs ≈ 4x faster)
