@@ -172,9 +172,26 @@ def main() -> None:
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=train_cfg.model_name,
         max_seq_length=train_cfg.max_seq_length,
+        dtype=None,
         load_in_4bit=train_cfg.use_lora,
         fast_inference=True,
     )
+
+    # Apply LoRA with optimized parameters (only if use_lora=True)
+    if train_cfg.use_lora:
+        model = FastLanguageModel.get_peft_model(
+            model,
+            r=train_cfg.lora_rank if train_cfg.lora_rank else 64,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                            "gate_proj", "up_proj", "down_proj"],
+            lora_alpha=train_cfg.lora_alpha,
+            lora_dropout=train_cfg.lora_dropout,
+            bias="none",
+            use_gradient_checkpointing="unsloth" if args.gradient_checkpointing else False,
+            random_state=train_cfg.seed,
+            use_rslora=False,
+            loftq_config=None,
+        )
 
     logger.info("Loading dataset from %s", dataset_path)
     dataset = load_dataset("json", data_files=dataset_path, split="train")
@@ -238,8 +255,18 @@ def main() -> None:
         "max_completion_length": rollout_cfg.max_tokens,
         "logging_steps": 1 if args.smoke else 10,
     }
+    # GRPO-specific Unsloth optimizations (saves ~5GB VRAM)
+    if train_cfg.grpo_mini_batch is not None:
+        trainer_args["unsloth_grpo_mini_batch"] = train_cfg.grpo_mini_batch
+    if train_cfg.grpo_logit_chunk_multiplier is not None:
+        trainer_args["unsloth_logit_chunk_multiplier"] = train_cfg.grpo_logit_chunk_multiplier
+    # 8-bit optimizer for memory efficiency
+    if train_cfg.use_8bit_optimizer:
+        trainer_args["optim"] = "adamw_8bit"
+    # Use Unsloth's optimized gradient checkpointing
     if args.gradient_checkpointing:
-        trainer_args["gradient_checkpointing"] = True
+        trainer_args["gradient_checkpointing"] = "unsloth"
+        trainer_args["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
     if wandb_enabled:
         trainer_args["report_to"] = ["wandb"]
         trainer_args["run_name"] = run_name

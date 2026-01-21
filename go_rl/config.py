@@ -63,7 +63,12 @@ class TrainingConfig:
     num_steps: int = 2000
     seed: int = 3407
     lora_rank: Optional[int] = 64
+    lora_alpha: int = 16
+    lora_dropout: float = 0.0
     use_lora: bool = True
+    grpo_mini_batch: Optional[int] = 1
+    grpo_logit_chunk_multiplier: Optional[int] = 4
+    use_8bit_optimizer: bool = True
 
     def __post_init__(self) -> None:
         self.output_dir = _expand_path(self.output_dir)
@@ -80,6 +85,12 @@ class SftConfig:
     epochs: int = 1
     batch_size: int = 4
     learning_rate: float = 5e-5
+    lora_rank: int = 64
+    lora_alpha: int = 16
+    lora_dropout: float = 0.0
+    use_packing: bool = True
+    use_8bit_optimizer: bool = True
+    seed: int = 3407
 
     def __post_init__(self) -> None:
         self.dataset_path = _expand_path(self.dataset_path)

@@ -32,6 +32,42 @@ Or train individually:
 ./train_grpo.sh --smoke   # RL training
 ```
 
+## Shell Script Usage
+
+These scripts live at repo root. If a script supports flags, it also supports `--help`.
+
+Setup and validation:
+```bash
+./setup_environment.sh       # installs deps + KataGo, writes .env
+./verify_setup.sh            # checks venv, CUDA, KataGo, data
+```
+
+SGF ingestion and dataset prep:
+```bash
+./download_sample_sgf.sh --board-size 9x9   # manual download guidance
+./download_sample_sgf.sh --board-size 19x19
+./prepare_data.sh                          # builds data/sft_*.jsonl + data/rl_prompts_*.jsonl
+```
+
+Training helpers:
+```bash
+./train_sft.sh --smoke --board-size 9x9 --wandb --wandb-project go-rl
+./train_grpo.sh --smoke --board-size 9x9 --wandb --wandb-project go-rl
+```
+
+Multi-GPU examples:
+```bash
+./train_sft.sh --multi-gpu ddp-4 --gradient-checkpointing
+./train_grpo.sh --multi-gpu ddp-4
+```
+
+Full pipeline:
+```bash
+./run_full_pipeline.sh --smoke
+./run_full_pipeline.sh --board-size 19x19 --wandb
+./run_full_pipeline.sh --skip-setup --skip-data
+```
+
 ## Manual Setup
 
 If you prefer manual setup:

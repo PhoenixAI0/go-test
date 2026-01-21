@@ -10,7 +10,12 @@ training:
   num_steps: 2000
   seed: 3407
   lora_rank: 64
+  lora_alpha: 16
+  lora_dropout: 0.0
   use_lora: true
+  grpo_mini_batch: 1
+  grpo_logit_chunk_multiplier: 4
+  use_8bit_optimizer: true
 katago:
   binary_path: ${KATAGO_BIN}
   model_path: ${KATAGO_MODEL}

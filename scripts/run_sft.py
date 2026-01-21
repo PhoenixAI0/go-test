@@ -70,7 +70,23 @@ def main() -> None:
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=cfg.model_name,
         max_seq_length=cfg.max_seq_length,
+        dtype=None,
         load_in_4bit=True,
+    )
+
+    # Apply LoRA with optimized parameters
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r=cfg.lora_rank,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                        "gate_proj", "up_proj", "down_proj"],
+        lora_alpha=cfg.lora_alpha,
+        lora_dropout=cfg.lora_dropout,
+        bias="none",
+        use_gradient_checkpointing="unsloth" if args.gradient_checkpointing else False,
+        random_state=cfg.seed,
+        use_rslora=False,
+        loftq_config=None,
     )
 
     logger.info("Loading dataset from %s", cfg.dataset_path)
@@ -108,9 +124,18 @@ def main() -> None:
         "max_seq_length": cfg.max_seq_length,
         "logging_steps": 1 if args.smoke else 10,
         "max_steps": 1 if args.smoke else -1,
+        "dataset_num_proc": 2,
     }
+    # Packing optimization: 3-5x speedup
+    if cfg.use_packing:
+        trainer_args["packing"] = True
+    # 8-bit optimizer for memory efficiency
+    if cfg.use_8bit_optimizer:
+        trainer_args["optim"] = "adamw_8bit"
+    # Use Unsloth's optimized gradient checkpointing
     if args.gradient_checkpointing:
-        trainer_args["gradient_checkpointing"] = True
+        trainer_args["gradient_checkpointing"] = "unsloth"
+        trainer_args["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
     if wandb_enabled:
         trainer_args["report_to"] = ["wandb"]
         trainer_args["run_name"] = run_name
