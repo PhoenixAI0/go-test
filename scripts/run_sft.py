@@ -39,6 +39,11 @@ def main() -> None:
         choices=["online", "offline", "disabled"],
         help="Weights & Biases mode.",
     )
+    parser.add_argument(
+        "--gradient-checkpointing",
+        action="store_true",
+        help="Enable gradient checkpointing for memory efficiency",
+    )
     args = parser.parse_args()
 
     setup_logging(args.log_level)
@@ -104,6 +109,8 @@ def main() -> None:
         "logging_steps": 1 if args.smoke else 10,
         "max_steps": 1 if args.smoke else -1,
     }
+    if args.gradient_checkpointing:
+        trainer_args["gradient_checkpointing"] = True
     if wandb_enabled:
         trainer_args["report_to"] = ["wandb"]
         trainer_args["run_name"] = run_name

@@ -1,6 +1,6 @@
 dataset: data/rl_prompts_19x19.jsonl
 training:
-  model_name: qwen-3-8b
+  model_name: outputs/grpo_9x9  # Load from 9x9 GRPO checkpoint (curriculum learning)
   output_dir: outputs/grpo_19x19
   log_dir: logs/grpo_19x19
   max_seq_length: 4096

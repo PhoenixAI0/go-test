@@ -1,6 +1,6 @@
 dataset: data/rl_prompts_9x9.jsonl
 training:
-  model_name: qwen-3-8b
+  model_name: outputs/sft_warm_start  # Load from SFT checkpoint
   output_dir: outputs/grpo_9x9
   log_dir: logs/grpo_9x9
   max_seq_length: 2048

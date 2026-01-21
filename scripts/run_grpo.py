@@ -46,6 +46,13 @@ def build_reward_fn(
     def reward_fn(
         prompts: List[str], completions: List[str], **_: object
     ) -> List[float]:
+        # In multi-GPU training, this should only be called on main process
+        # TRL's GRPOTrainer handles reward computation on rank 0 and broadcasts
+        if katago is None:
+            raise RuntimeError(
+                "KataGo not initialized. In multi-GPU training, "
+                "this should only happen on non-main processes."
+            )
         rewards: List[float] = []
         for prompt, completion in zip(prompts, completions):
             board = parse_prompt(prompt)
@@ -124,6 +131,11 @@ def main() -> None:
         choices=["online", "offline", "disabled"],
         help="Weights & Biases mode.",
     )
+    parser.add_argument(
+        "--gradient-checkpointing",
+        action="store_true",
+        help="Enable gradient checkpointing for memory efficiency",
+    )
     args = parser.parse_args()
 
     setup_logging(args.log_level)
@@ -172,9 +184,20 @@ def main() -> None:
         dataset = dataset.select(range(smoke_count))
     logger.info("Dataset rows: %d", len(dataset))
 
-    katago = KataGoAnalysisClient(katago_cfg)
-    logger.info("Starting KataGo")
-    katago.start()
+    # Check if we're in distributed training (multi-GPU)
+    # Only start KataGo on the main process (rank 0) to avoid conflicts
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    is_main_process = local_rank == 0
+
+    if is_main_process:
+        katago = KataGoAnalysisClient(katago_cfg)
+        logger.info("Starting KataGo on main process (rank %d)", local_rank)
+        katago.start()
+    else:
+        logger.info("Skipping KataGo on worker process (rank %d)", local_rank)
+        # Note: In multi-GPU training, reward computation happens on main process
+        # and rewards are broadcasted to other processes by the trainer
+        katago = None
 
     Path(train_cfg.output_dir).mkdir(parents=True, exist_ok=True)
     log_path = write_run_log(
@@ -215,6 +238,8 @@ def main() -> None:
         "max_completion_length": rollout_cfg.max_tokens,
         "logging_steps": 1 if args.smoke else 10,
     }
+    if args.gradient_checkpointing:
+        trainer_args["gradient_checkpointing"] = True
     if wandb_enabled:
         trainer_args["report_to"] = ["wandb"]
         trainer_args["run_name"] = run_name
@@ -229,8 +254,10 @@ def main() -> None:
     trainer.train()
     logger.info("Saving model to %s", train_cfg.output_dir)
     trainer.save_model(train_cfg.output_dir)
-    logger.info("Stopping KataGo")
-    katago.close()
+
+    if is_main_process and katago is not None:
+        logger.info("Stopping KataGo")
+        katago.close()
 
 
 if __name__ == "__main__":

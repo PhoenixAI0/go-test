@@ -17,6 +17,8 @@ USE_WANDB=false
 WANDB_PROJECT="go-rl"
 BOARD_SIZE="9x9"
 LOG_LEVEL="INFO"
+MULTI_GPU=""
+GRADIENT_CHECKPOINTING=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -40,6 +42,14 @@ while [[ $# -gt 0 ]]; do
             LOG_LEVEL="DEBUG"
             shift
             ;;
+        --multi-gpu)
+            MULTI_GPU="$2"
+            shift 2
+            ;;
+        --gradient-checkpointing)
+            GRADIENT_CHECKPOINTING=true
+            shift
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -49,6 +59,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --wandb-project NAME Set W&B project name (default: go-rl)"
             echo "  --board-size SIZE    Board size: 9x9 or 19x19 (default: 9x9)"
             echo "  --debug              Enable debug logging"
+            echo "  --multi-gpu MODE     Multi-GPU mode: ddp-2, ddp-4, ddp-8"
+            echo "  --gradient-checkpointing  Enable gradient checkpointing"
             echo "  -h, --help           Show this help message"
             exit 0
             ;;
@@ -97,7 +109,25 @@ else
 fi
 
 # Build command
-CMD="python scripts/run_sft.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
+if [ -z "$MULTI_GPU" ]; then
+    # Single GPU mode (backward compatible)
+    CMD="python scripts/run_sft.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
+else
+    # Multi-GPU mode with accelerate
+    ACCELERATE_CONFIG="config/accelerate/${MULTI_GPU}.yaml"
+    if [ ! -f "$ACCELERATE_CONFIG" ]; then
+        echo -e "${RED}Error: Accelerate config not found: $ACCELERATE_CONFIG${NC}"
+        echo "Valid options: ddp-2, ddp-4, ddp-8"
+        exit 1
+    fi
+    CMD="accelerate launch --config_file=$ACCELERATE_CONFIG scripts/run_sft.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
+    echo -e "${GREEN}Multi-GPU training enabled: $MULTI_GPU${NC}"
+fi
+
+if [ "$GRADIENT_CHECKPOINTING" = true ]; then
+    CMD="$CMD --gradient-checkpointing"
+    echo -e "${YELLOW}Gradient checkpointing enabled${NC}"
+fi
 
 if [ "$SMOKE_TEST" = true ]; then
     CMD="$CMD --smoke"

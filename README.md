@@ -96,6 +96,36 @@ python scripts/run_sft.py --config config/sft_warm_start.yaml --log-level DEBUG
 python scripts/run_sft.py --config config/sft_warm_start.yaml --wandb --wandb-project go-rl
 ```
 
+### Multi-GPU Training
+
+Train on multiple GPUs using Distributed Data Parallel (DDP):
+
+```bash
+# Check available GPUs
+nvidia-smi
+python scripts/check_gpu_setup.py
+
+# SFT Training with multiple GPUs
+./train_sft.sh --multi-gpu ddp-2    # 2 GPUs
+./train_sft.sh --multi-gpu ddp-4    # 4 GPUs
+./train_sft.sh --multi-gpu ddp-8    # 8 GPUs
+
+# GRPO Training with multiple GPUs
+./train_grpo.sh --multi-gpu ddp-4
+
+# With gradient checkpointing for memory efficiency
+./train_sft.sh --multi-gpu ddp-4 --gradient-checkpointing
+```
+
+**Performance:** Near-linear speedup (2 GPUs ≈ 2x faster, 4 GPUs ≈ 4x faster)
+
+**Requirements:**
+- Homogeneous GPUs recommended (same model/memory)
+- Works with Unsloth's 4-bit quantization
+- FSDP not supported (Unsloth limitation)
+
+See [Multi-GPU Guide](docs/MULTI_GPU_GUIDE.md) for detailed usage, performance tuning, and troubleshooting.
+
 ## Outputs and Logs
 - Model outputs live under `outputs/` (configurable via `output_dir`).
 - Run logs are JSON files under `logs/` (configurable via `log_dir`) and include
