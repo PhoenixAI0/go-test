@@ -49,6 +49,12 @@ class RewardConfig:
     length_penalty: float = -0.05
     full_game_bonus: float = 0.5
     strict_legality: bool = False
+    # Legality checking level: "basic", "ko", or "superko"
+    # If not specified, uses strict_legality flag for backward compatibility
+    # "basic" = only check position occupancy
+    # "ko" = check simple ko (immediate recapture forbidden)
+    # "superko" = check positional superko (any position repeat forbidden)
+    legality_level: Optional[str] = None
 
 
 @dataclass
