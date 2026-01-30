@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 class SgfGame:
     board_size: int
     moves: List[Tuple[str, Tuple[int, int] | None]]
+    setup_stones: List[Tuple[str, Tuple[int, int]]] = field(default_factory=list)
 
 
 def _require_sgfmill() -> None:
@@ -30,10 +31,20 @@ def load_sgf(path: str) -> SgfGame:
     logger.debug("Loading SGF file %s", path)
     with open(path, "rb") as handle:
         collection = sgf.Sgf_collection.from_bytes(handle.read())
+    if not collection:
+        raise ValueError("SGF file contains no games")
     game = collection[0]
     root = game.get_root()
     board_size = int(root.get("SZ", 19))
     moves: List[Tuple[str, Tuple[int, int] | None]] = []
+    setup_stones: List[Tuple[str, Tuple[int, int]]] = []
+
+    setup_black = root.get("AB") or []
+    setup_white = root.get("AW") or []
+    for coords in setup_black:
+        setup_stones.append(("B", coords))
+    for coords in setup_white:
+        setup_stones.append(("W", coords))
 
     for node in game.get_main_sequence()[1:]:
         if node.has_move("b"):
@@ -46,7 +57,11 @@ def load_sgf(path: str) -> SgfGame:
             continue
         moves.append((color, coords))
     logger.debug("Parsed SGF file %s with %d moves", path, len(moves))
-    return SgfGame(board_size=board_size, moves=moves)
+    return SgfGame(
+        board_size=board_size,
+        moves=moves,
+        setup_stones=setup_stones,
+    )
 
 
 def sample_positions(game: SgfGame, max_positions: int) -> List[dict]:
@@ -58,6 +73,9 @@ def sample_positions(game: SgfGame, max_positions: int) -> List[dict]:
         game.board_size,
         game.board_size,
     )
+    for player, coords in game.setup_stones:
+        gtp_move = coords_to_gtp(coords, game.board_size)
+        board.apply_move(player, gtp_move)
     for player, coords in game.moves:
         if coords is None:
             gtp_move = "PASS"
@@ -78,19 +96,36 @@ def sample_positions(game: SgfGame, max_positions: int) -> List[dict]:
     return samples
 
 
-def load_sgf_dir(sgf_dir: str, max_positions: int) -> List[dict]:
-    samples: List[dict] = []
+def iter_sgf_samples(sgf_dir: str, max_positions: int) -> Iterable[dict]:
     logger.info("Scanning SGF directory %s", sgf_dir)
-    for path in Path(sgf_dir).glob("**/*.sgf"):
-        game = load_sgf(str(path))
-        remaining = max_positions - len(samples)
-        if remaining <= 0:
+    collected = 0
+    for path in sorted(Path(sgf_dir).glob("**/*.sgf")):
+        if collected >= max_positions:
             break
+        try:
+            game = load_sgf(str(path))
+        except Exception as exc:
+            logger.warning("Skipping SGF file %s: %s", path, exc)
+            continue
+        remaining = max_positions - collected
         logger.debug(
             "Sampling %d remaining positions from %s",
             remaining,
             path,
         )
-        samples.extend(sample_positions(game, max_positions=remaining))
+        try:
+            samples = sample_positions(game, max_positions=remaining)
+        except Exception as exc:
+            logger.warning("Skipping SGF file %s: %s", path, exc)
+            continue
+        for sample in samples:
+            yield sample
+            collected += 1
+            if collected >= max_positions:
+                break
+
+
+def load_sgf_dir(sgf_dir: str, max_positions: int) -> List[dict]:
+    samples = list(iter_sgf_samples(sgf_dir, max_positions=max_positions))
     logger.info("Loaded %d samples from %s", len(samples), sgf_dir)
     return samples

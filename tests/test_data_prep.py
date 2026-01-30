@@ -19,11 +19,11 @@ def test_build_sft_dataset_writes_jsonl(tmp_path, monkeypatch):
         },
     ]
 
-    def fake_load_sgf_dir(_sgf_dir, max_positions):
+    def fake_iter_sgf_samples(_sgf_dir, max_positions):
         assert max_positions == 2
-        return samples
+        return iter(samples)
 
-    monkeypatch.setattr("go_rl.data_prep.load_sgf_dir", fake_load_sgf_dir)
+    monkeypatch.setattr("go_rl.data_prep.iter_sgf_samples", fake_iter_sgf_samples)
 
     output_path = tmp_path / "data" / "sft.jsonl"
     count = build_sft_dataset("/unused", str(output_path), max_positions=2)

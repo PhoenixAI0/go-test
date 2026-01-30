@@ -5,7 +5,7 @@ import json
 import logging
 from pathlib import Path
 
-from go_rl.sgf_utils import load_sgf_dir
+from go_rl.sgf_utils import iter_sgf_samples
 from go_rl.logging_utils import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -30,22 +30,24 @@ def main() -> None:
     sft_path = output_root / f"sft_{args.tag}.jsonl"
     rl_path = output_root / f"rl_prompts_{args.tag}.jsonl"
 
-    samples = load_sgf_dir(args.sgf_dir, max_positions=args.max_positions)
     sft_path.parent.mkdir(parents=True, exist_ok=True)
-    with sft_path.open("w", encoding="utf-8") as handle:
-        for sample in samples:
+    rl_path.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with (
+        sft_path.open("w", encoding="utf-8") as sft_handle,
+        rl_path.open("w", encoding="utf-8") as rl_handle,
+    ):
+        for sample in iter_sgf_samples(args.sgf_dir, max_positions=args.max_positions):
             record = {
                 "prompt": sample["prompt"],
                 "response": sample["target"],
                 "board_size": sample["board_size"],
             }
-            handle.write(json.dumps(record) + "\n")
-    rl_path.parent.mkdir(parents=True, exist_ok=True)
-    with rl_path.open("w", encoding="utf-8") as handle:
-        for sample in samples:
-            handle.write(json.dumps({"prompt": sample["prompt"]}) + "\n")
-    logger.info("Wrote %d SFT samples to %s", len(samples), sft_path)
-    logger.info("Wrote %d RL prompts to %s", len(samples), rl_path)
+            sft_handle.write(json.dumps(record) + "\n")
+            rl_handle.write(json.dumps({"prompt": sample["prompt"]}) + "\n")
+            count += 1
+    logger.info("Wrote %d SFT samples to %s", count, sft_path)
+    logger.info("Wrote %d RL prompts to %s", count, rl_path)
 
 
 if __name__ == "__main__":

@@ -42,9 +42,7 @@ def build_reward_fn(
     reward_cfg: RewardConfig,
     rollout_cfg: RolloutConfig,
 ) -> callable:
-    def winrate_for_player(
-        winrate: float, to_move: str, player: str
-    ) -> float:
+    def winrate_for_player(winrate: float, to_move: str, player: str) -> float:
         if to_move.upper() == player.upper():
             return winrate
         return 1.0 - winrate
@@ -64,14 +62,15 @@ def build_reward_fn(
             board = parse_prompt(prompt)
             player = board.next_player()
             base_analysis = katago.analyze_position(board)
-            base_winrate = winrate_for_player(
-                base_analysis.winrate, player, player
-            )
+            base_winrate = winrate_for_player(base_analysis.winrate, player, player)
             try:
-                move = normalize_move(
-                    completion, stop_at_pass=rollout_cfg.stop_at_pass
-                )
+                move = normalize_move(completion, stop_at_pass=rollout_cfg.stop_at_pass)
             except Exception:
+                logger.debug(
+                    "Failed to normalize completion: %r",
+                    completion,
+                    exc_info=True,
+                )
                 breakdown = evaluate_move(
                     board, completion, 0.0, reward_cfg, player=player
                 )
@@ -81,12 +80,11 @@ def build_reward_fn(
                 coords = gtp_to_coords(move, board.size)
                 valid_coords = True
             except Exception:
+                logger.debug("Invalid move coords: %r", move, exc_info=True)
                 coords = None
                 valid_coords = False
             if not valid_coords:
-                breakdown = evaluate_move(
-                    board, move, 0.0, reward_cfg, player=player
-                )
+                breakdown = evaluate_move(board, move, 0.0, reward_cfg, player=player)
                 rewards.append(breakdown.total)
                 continue
             if coords is None:
@@ -96,9 +94,7 @@ def build_reward_fn(
             else:
                 is_legal = board.is_basic_legal(coords)
             if not is_legal:
-                breakdown = evaluate_move(
-                    board, move, 0.0, reward_cfg, player=player
-                )
+                breakdown = evaluate_move(board, move, 0.0, reward_cfg, player=player)
                 rewards.append(breakdown.total)
                 continue
             candidate = BoardState(size=board.size, moves=list(board.moves))
@@ -111,14 +107,11 @@ def build_reward_fn(
                     player,
                 )
                 delta = candidate_winrate - base_winrate
-                breakdown = evaluate_move(
-                    board, move, delta, reward_cfg, player=player
-                )
+                breakdown = evaluate_move(board, move, delta, reward_cfg, player=player)
                 rewards.append(breakdown.total)
             except Exception:
-                breakdown = evaluate_move(
-                    board, move, 0.0, reward_cfg, player=player
-                )
+                logger.debug("Candidate analysis failed", exc_info=True)
+                breakdown = evaluate_move(board, move, 0.0, reward_cfg, player=player)
                 rewards.append(breakdown.total)
         return rewards
 
@@ -198,12 +191,21 @@ def main() -> None:
         model = FastLanguageModel.get_peft_model(
             model,
             r=train_cfg.lora_rank if train_cfg.lora_rank else 64,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                            "gate_proj", "up_proj", "down_proj"],
+            target_modules=[
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+            ],
             lora_alpha=train_cfg.lora_alpha,
             lora_dropout=train_cfg.lora_dropout,
             bias="none",
-            use_gradient_checkpointing="unsloth" if args.gradient_checkpointing else False,
+            use_gradient_checkpointing="unsloth"
+            if args.gradient_checkpointing
+            else False,
             random_state=train_cfg.seed,
             use_rslora=False,
             loftq_config=None,
@@ -222,90 +224,93 @@ def main() -> None:
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     is_main_process = local_rank == 0
 
-    if is_main_process:
-        katago = KataGoAnalysisClient(katago_cfg)
-        logger.info("Starting KataGo on main process (rank %d)", local_rank)
-        katago.start()
-    else:
-        logger.info("Skipping KataGo on worker process (rank %d)", local_rank)
-        # Note: In multi-GPU training, reward computation happens on main process
-        # and rewards are broadcasted to other processes by the trainer
-        katago = None
+    katago = None
+    try:
+        if is_main_process:
+            katago = KataGoAnalysisClient(katago_cfg)
+            logger.info("Starting KataGo on main process (rank %d)", local_rank)
+            katago.start()
+        else:
+            logger.info("Skipping KataGo on worker process (rank %d)", local_rank)
+            # Note: In multi-GPU training, reward computation happens on main process
+            # and rewards are broadcasted to other processes by the trainer
 
-    Path(train_cfg.output_dir).mkdir(parents=True, exist_ok=True)
-    log_path = write_run_log(
-        train_cfg.log_dir,
-        run_name,
-        args.config,
-        {
-            "training": asdict(train_cfg),
-            "katago": asdict(katago_cfg),
-            "reward": asdict(reward_cfg),
-            "rollout": asdict(rollout_cfg),
-            "dataset": dataset_path,
-        },
-        extra={
-            "smoke": args.smoke,
-            "dataset_rows": len(dataset),
-            "wandb": {
-                "enabled": wandb_enabled,
-                "project": args.wandb_project,
-                "entity": args.wandb_entity,
-                "mode": args.wandb_mode,
+        Path(train_cfg.output_dir).mkdir(parents=True, exist_ok=True)
+        log_path = write_run_log(
+            train_cfg.log_dir,
+            run_name,
+            args.config,
+            {
+                "training": asdict(train_cfg),
+                "katago": asdict(katago_cfg),
+                "reward": asdict(reward_cfg),
+                "rollout": asdict(rollout_cfg),
+                "dataset": dataset_path,
             },
-        },
-        packages=["datasets", "trl", "unsloth", "torch", "transformers"],
-    )
-    logger.info("Wrote run log to %s", log_path)
-    logger.info("Starting GRPO training run %s", run_name)
-    num_workers = default_num_workers()
-    trainer_args = {
-        "output_dir": train_cfg.output_dir,
-        "max_seq_length": train_cfg.max_seq_length,
-        "num_train_epochs": 1,
-        "per_device_train_batch_size": train_cfg.batch_size,
-        "gradient_accumulation_steps": train_cfg.gradient_accumulation,
-        "learning_rate": train_cfg.learning_rate,
-        "num_generations": rollout_cfg.num_samples,
-        "temperature": rollout_cfg.temperature,
-        "top_p": rollout_cfg.top_p,
-        "max_completion_length": rollout_cfg.max_tokens,
-        "logging_steps": 1 if args.smoke else 10,
-        "dataloader_num_workers": num_workers,
-        "dataloader_pin_memory": True,
-    }
-    max_steps = 1 if args.smoke else train_cfg.num_steps
-    trainer_args["max_steps"] = max_steps if max_steps > 0 else -1
-    # GRPO-specific Unsloth optimizations (saves ~5GB VRAM)
-    if train_cfg.grpo_mini_batch is not None:
-        trainer_args["unsloth_grpo_mini_batch"] = train_cfg.grpo_mini_batch
-    if train_cfg.grpo_logit_chunk_multiplier is not None:
-        trainer_args["unsloth_logit_chunk_multiplier"] = train_cfg.grpo_logit_chunk_multiplier
-    # 8-bit optimizer for memory efficiency
-    if train_cfg.use_8bit_optimizer:
-        trainer_args["optim"] = "adamw_8bit"
-    # Use Unsloth's optimized gradient checkpointing
-    if args.gradient_checkpointing:
-        trainer_args["gradient_checkpointing"] = "unsloth"
-        trainer_args["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
-    if wandb_enabled:
-        trainer_args["report_to"] = ["wandb"]
-        trainer_args["run_name"] = run_name
-    trainer = GRPOTrainer(
-        model=model,
-        tokenizer=tokenizer,
-        reward_funcs=build_reward_fn(katago, reward_cfg, rollout_cfg),
-        train_dataset=dataset,
-        args=GRPOConfig(**trainer_args),
-    )
+            extra={
+                "smoke": args.smoke,
+                "dataset_rows": len(dataset),
+                "wandb": {
+                    "enabled": wandb_enabled,
+                    "project": args.wandb_project,
+                    "entity": args.wandb_entity,
+                    "mode": args.wandb_mode,
+                },
+            },
+            packages=["datasets", "trl", "unsloth", "torch", "transformers"],
+        )
+        logger.info("Wrote run log to %s", log_path)
+        logger.info("Starting GRPO training run %s", run_name)
+        num_workers = default_num_workers()
+        trainer_args = {
+            "output_dir": train_cfg.output_dir,
+            "max_seq_length": train_cfg.max_seq_length,
+            "num_train_epochs": 1,
+            "per_device_train_batch_size": train_cfg.batch_size,
+            "gradient_accumulation_steps": train_cfg.gradient_accumulation,
+            "learning_rate": train_cfg.learning_rate,
+            "num_generations": rollout_cfg.num_samples,
+            "temperature": rollout_cfg.temperature,
+            "top_p": rollout_cfg.top_p,
+            "max_completion_length": rollout_cfg.max_tokens,
+            "logging_steps": 1 if args.smoke else 10,
+            "dataloader_num_workers": num_workers,
+            "dataloader_pin_memory": True,
+        }
+        max_steps = 1 if args.smoke else train_cfg.num_steps
+        trainer_args["max_steps"] = max_steps if max_steps > 0 else -1
+        # GRPO-specific Unsloth optimizations (saves ~5GB VRAM)
+        if train_cfg.grpo_mini_batch is not None:
+            trainer_args["unsloth_grpo_mini_batch"] = train_cfg.grpo_mini_batch
+        if train_cfg.grpo_logit_chunk_multiplier is not None:
+            trainer_args["unsloth_logit_chunk_multiplier"] = (
+                train_cfg.grpo_logit_chunk_multiplier
+            )
+        # 8-bit optimizer for memory efficiency
+        if train_cfg.use_8bit_optimizer:
+            trainer_args["optim"] = "adamw_8bit"
+        # Use Unsloth's optimized gradient checkpointing
+        if args.gradient_checkpointing:
+            trainer_args["gradient_checkpointing"] = "unsloth"
+            trainer_args["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+        if wandb_enabled:
+            trainer_args["report_to"] = ["wandb"]
+            trainer_args["run_name"] = run_name
+        trainer = GRPOTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            reward_funcs=build_reward_fn(katago, reward_cfg, rollout_cfg),
+            train_dataset=dataset,
+            args=GRPOConfig(**trainer_args),
+        )
 
-    trainer.train()
-    logger.info("Saving model to %s", train_cfg.output_dir)
-    trainer.save_model(train_cfg.output_dir)
-
-    if is_main_process and katago is not None:
-        logger.info("Stopping KataGo")
-        katago.close()
+        trainer.train()
+        logger.info("Saving model to %s", train_cfg.output_dir)
+        trainer.save_model(train_cfg.output_dir)
+    finally:
+        if is_main_process and katago is not None:
+            logger.info("Stopping KataGo")
+            katago.close()
 
 
 if __name__ == "__main__":

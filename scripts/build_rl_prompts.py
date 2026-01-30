@@ -5,7 +5,7 @@ import json
 import logging
 from pathlib import Path
 
-from go_rl.sgf_utils import load_sgf_dir
+from go_rl.sgf_utils import iter_sgf_samples
 from go_rl.logging_utils import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -25,13 +25,14 @@ def main() -> None:
 
     setup_logging(args.log_level)
     logger.info("Building RL prompt dataset")
-    samples = load_sgf_dir(args.sgf_dir, max_positions=args.max_positions)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
     with output.open("w", encoding="utf-8") as handle:
-        for sample in samples:
+        for sample in iter_sgf_samples(args.sgf_dir, max_positions=args.max_positions):
             handle.write(json.dumps({"prompt": sample["prompt"]}) + "\n")
-    logger.info("Wrote %d prompts to %s", len(samples), args.output)
+            count += 1
+    logger.info("Wrote %d prompts to %s", count, args.output)
 
 
 if __name__ == "__main__":

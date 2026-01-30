@@ -116,31 +116,22 @@ class BoardState:
     def empty(cls, size: int) -> "BoardState":
         return cls(size=size, moves=[])
 
-    def _naive_occupied(self) -> set[Tuple[int, int]]:
-        stones = set()
-        for _, coords in self.moves:
-            if coords is not None:
-                stones.add(coords)
-        return stones
-
-    def _current_board(self) -> Optional[List[List[int]]]:
+    def _current_board(self) -> List[List[int]]:
         board = [[_EMPTY for _ in range(self.size)] for _ in range(self.size)]
-        for player, coords in self.moves:
+        for index, (player, coords) in enumerate(self.moves, start=1):
             if coords is None:
                 continue
             color = _STONE.get(player.upper())
             if color is None:
-                return None
+                raise ValueError(f"Unknown player at move {index}: {player}")
             try:
                 board = _apply_strict_move(board, color, coords)
-            except Exception:
-                return None
+            except Exception as exc:
+                raise ValueError(f"Illegal move at {index}: {player} {coords}") from exc
         return board
 
     def occupied(self) -> set[Tuple[int, int]]:
         board = self._current_board()
-        if board is None:
-            return self._naive_occupied()
         stones = set()
         for row in range(self.size):
             for col in range(self.size):
@@ -156,12 +147,8 @@ class BoardState:
             return "W"
         if last_player == "W":
             return "B"
-        black_moves = sum(
-            1 for player, _ in self.moves if player.upper() == "B"
-        )
-        white_moves = sum(
-            1 for player, _ in self.moves if player.upper() == "W"
-        )
+        black_moves = sum(1 for player, _ in self.moves if player.upper() == "B")
+        white_moves = sum(1 for player, _ in self.moves if player.upper() == "W")
         return "B" if black_moves == white_moves else "W"
 
     def is_basic_legal(self, coords: Optional[Tuple[int, int]]) -> bool:
@@ -171,8 +158,6 @@ class BoardState:
         if row < 0 or row >= self.size or col < 0 or col >= self.size:
             return False
         board = self._current_board()
-        if board is None:
-            return coords not in self._naive_occupied()
         return board[row][col] == _EMPTY
 
     def _strict_board_state(
@@ -190,9 +175,7 @@ class BoardState:
             board = _apply_strict_move(board, color, coords)
         return board, previous
 
-    def is_strict_legal(
-        self, player: str, coords: Optional[Tuple[int, int]]
-    ) -> bool:
+    def is_strict_legal(self, player: str, coords: Optional[Tuple[int, int]]) -> bool:
         if coords is None:
             return True
         color = _STONE.get(player.upper())
@@ -215,11 +198,18 @@ class BoardState:
             return False
         return True
 
-    def apply_move(self, player: str, move: str) -> None:
+    def apply_move(self, player: str, move: str, strict: bool = False) -> None:
         player = player.strip().upper()
+        if player not in _STONE:
+            raise ValueError(f"Unknown player: {player}")
         coords = gtp_to_coords(move, self.size)
-        if not self.is_basic_legal(coords):
-            raise ValueError(f"Illegal move for basic rules: {move}")
+        if strict:
+            is_legal = self.is_strict_legal(player, coords)
+        else:
+            is_legal = self.is_basic_legal(coords)
+        if not is_legal:
+            rule_label = "strict" if strict else "basic"
+            raise ValueError(f"Illegal move for {rule_label} rules: {move}")
         self.moves.append((player, coords))
 
     def to_prompt(self) -> str:
