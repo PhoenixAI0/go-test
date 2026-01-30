@@ -101,11 +101,15 @@ echo -e "${GREEN}Found dataset: $DATASET_FILE ($SAMPLE_COUNT samples)${NC}"
 if [ "$BOARD_SIZE" = "9x9" ]; then
     CONFIG_FILE="config/sft_warm_start.yaml"
 elif [ "$BOARD_SIZE" = "19x19" ]; then
-    # For 19x19, we'd need a separate config, but using same one for now
-    CONFIG_FILE="config/sft_warm_start.yaml"
-    echo -e "${YELLOW}Note: Using 9x9 config for 19x19. Consider creating config/sft_warm_start_19x19.yaml${NC}"
+    CONFIG_FILE="config/sft_warm_start_19x19.yaml"
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo -e "${RED}Error: 19x19 config not found: $CONFIG_FILE${NC}"
+        echo "This config should exist in the repository."
+        exit 1
+    fi
 else
     echo -e "${RED}Error: Invalid board size: $BOARD_SIZE${NC}"
+    echo "Supported sizes: 9x9, 19x19"
     exit 1
 fi
 
@@ -192,8 +196,13 @@ if [ $? -eq 0 ]; then
     echo "SFT Training Complete!"
     echo "==========================================${NC}"
     echo ""
-    echo "Model saved to: outputs/sft_warm_start/"
-    echo "Logs saved to: logs/sft_warm_start/"
+    if [ "$BOARD_SIZE" = "19x19" ]; then
+        echo "Model saved to: outputs/sft_warm_start_19x19/"
+        echo "Logs saved to: logs/sft_warm_start_19x19/"
+    else
+        echo "Model saved to: outputs/sft_warm_start/"
+        echo "Logs saved to: logs/sft_warm_start/"
+    fi
     echo ""
     if [ "$SMOKE_TEST" = false ]; then
         echo "Next steps:"

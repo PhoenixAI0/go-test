@@ -50,12 +50,19 @@ def build_reward_fn(
     def reward_fn(
         prompts: List[str], completions: List[str], **_: object
     ) -> List[float]:
-        # In multi-GPU training, this should only be called on main process
-        # TRL's GRPOTrainer handles reward computation on rank 0 and broadcasts
+        # CRITICAL: In multi-GPU training, reward computation MUST only run on rank 0
+        # TRL's GRPOTrainer handles reward computation on rank 0 and broadcasts to workers
+        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+        if local_rank != 0:
+            raise RuntimeError(
+                f"Reward function called on non-main process (rank {local_rank}). "
+                "This should never happen - rewards must be computed on rank 0 only."
+            )
+
         if katago is None:
             raise RuntimeError(
-                "KataGo not initialized. In multi-GPU training, "
-                "this should only happen on non-main processes."
+                "KataGo not initialized on rank 0. This is a configuration error. "
+                "Ensure KataGo client is started before creating the reward function."
             )
         rewards: List[float] = []
         for prompt, completion in zip(prompts, completions):
@@ -220,18 +227,35 @@ def main() -> None:
     logger.info("Dataset rows: %d", len(dataset))
 
     # Check if we're in distributed training (multi-GPU)
-    # Only start KataGo on the main process (rank 0) to avoid conflicts
+    # CRITICAL: Only start KataGo on the main process (rank 0) to avoid:
+    # - Resource contention (multiple KataGo instances competing)
+    # - File system conflicts (simultaneous writes)
+    # - Redundant computation (same analysis on multiple ranks)
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
     is_main_process = local_rank == 0
+
+    if world_size > 1:
+        logger.info(
+            "Multi-GPU training detected: rank %d of %d", local_rank, world_size
+        )
 
     katago = None
     try:
         if is_main_process:
             katago = KataGoAnalysisClient(katago_cfg)
-            logger.info("Starting KataGo on main process (rank %d)", local_rank)
+            logger.info(
+                "Starting KataGo on main process (rank %d/%d)", local_rank, world_size
+            )
             katago.start()
+            logger.info("KataGo client initialized successfully on rank 0")
         else:
-            logger.info("Skipping KataGo on worker process (rank %d)", local_rank)
+            logger.info(
+                "Skipping KataGo on worker process (rank %d/%d)", local_rank, world_size
+            )
+            logger.info(
+                "Reward computation will be handled by rank 0 and broadcasted"
+            )
             # Note: In multi-GPU training, reward computation happens on main process
             # and rewards are broadcasted to other processes by the trainer
 
