@@ -11,14 +11,26 @@ from __future__ import annotations
 
 import argparse
 import logging
+import multiprocessing as mp
 import os
 import shutil
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from functools import partial
 from pathlib import Path
 from typing import List, Tuple
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+
+def _get_num_workers() -> int:
+    """Get optimal number of worker processes."""
+    try:
+        cpu_count = mp.cpu_count()
+        return max(1, cpu_count - 1)
+    except NotImplementedError:
+        return 4
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -110,18 +122,47 @@ def validate_sgf(sgf_file: Path) -> Tuple[bool, str]:
         return False, f"read_error: {e}"
 
 
+def _validate_and_filter_file(
+    sgf_file: Path, min_moves: int, max_moves: int
+) -> Tuple[Path, bool, str, str]:
+    """Validate and filter a single SGF file (for parallel processing).
+
+    Args:
+        sgf_file: Path to SGF file
+        min_moves: Minimum acceptable moves
+        max_moves: Maximum acceptable moves
+
+    Returns:
+        Tuple of (path, is_valid, validation_reason, filter_reason)
+    """
+    # Validate
+    is_valid, val_reason = validate_sgf(sgf_file)
+    if not is_valid:
+        return (sgf_file, False, val_reason, "")
+
+    # Filter by length
+    should_keep, filter_reason = filter_by_length(sgf_file, min_moves, max_moves)
+    return (sgf_file, should_keep, "valid", filter_reason)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Filter self-play games by quality",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Filter games by length only
+  # Filter games by length only (parallel)
   python scripts/filter_self_play_games.py \\
       --input data/self_play/9x9 \\
       --output data/self_play/9x9_filtered \\
       --min-moves 20 \\
       --max-moves 150
+
+  # Filter sequentially (no parallel)
+  python scripts/filter_self_play_games.py \\
+      --input data/self_play/9x9 \\
+      --output data/self_play/9x9_filtered \\
+      --no-parallel
 
   # Validate only (no KataGo analysis)
   python scripts/filter_self_play_games.py \\
@@ -179,6 +220,17 @@ Note: KataGo quality filtering is not fully implemented yet.
         help="Only validate, don't copy files",
     )
     parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=0,
+        help="Number of parallel workers (0 = auto-detect, 1 = sequential)",
+    )
+    parser.add_argument(
+        "--no-parallel",
+        action="store_true",
+        help="Disable parallel processing",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -205,41 +257,82 @@ Note: KataGo quality filtering is not fully implemented yet.
 
     logger.info(f"Found {len(sgf_files)} SGF files in {input_dir}")
 
-    # Validate files
-    logger.info("Validating SGF files...")
-    valid_files = []
-    invalid_count = 0
+    # Determine whether to use parallel processing
+    num_workers = args.num_workers
+    if num_workers == 0:
+        num_workers = _get_num_workers()
 
-    for sgf_file in sgf_files:
-        is_valid, reason = validate_sgf(sgf_file)
-        if is_valid:
-            valid_files.append(sgf_file)
-        else:
-            invalid_count += 1
-            logger.debug(f"Invalid: {sgf_file.name} - {reason}")
+    use_parallel = not args.no_parallel and num_workers > 1 and len(sgf_files) > 1
 
-    logger.info(f"Valid files: {len(valid_files)} / {len(sgf_files)}")
-    if invalid_count > 0:
-        logger.warning(f"Invalid files: {invalid_count}")
+    if use_parallel:
+        logger.info(f"Using parallel processing with {num_workers} workers")
+        # Parallel validation and filtering
+        logger.info("Validating and filtering SGF files in parallel...")
+        filtered_files = []
+        invalid_count = 0
+        filter_reasons = {}
 
-    # Filter by length
-    logger.info(f"Filtering by length ({args.min_moves}-{args.max_moves} moves)...")
-    filtered_files = []
-    filter_reasons = {}
-
-    for sgf_file in valid_files:
-        should_keep, reason = filter_by_length(
-            sgf_file, args.min_moves, args.max_moves
+        process_func = partial(
+            _validate_and_filter_file,
+            min_moves=args.min_moves,
+            max_moves=args.max_moves,
         )
-        if should_keep:
-            filtered_files.append(sgf_file)
-        else:
-            filter_reasons[reason] = filter_reasons.get(reason, 0) + 1
-            logger.debug(f"Filtered out: {sgf_file.name} - {reason}")
 
-    logger.info(f"After length filtering: {len(filtered_files)} / {len(valid_files)}")
-    for reason, count in filter_reasons.items():
-        logger.info(f"  {reason}: {count}")
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            results = executor.map(process_func, sgf_files)
+
+            for sgf_file, should_keep, val_reason, filter_reason in results:
+                if val_reason != "valid":
+                    invalid_count += 1
+                    logger.debug(f"Invalid: {sgf_file.name} - {val_reason}")
+                elif should_keep:
+                    filtered_files.append(sgf_file)
+                else:
+                    filter_reasons[filter_reason] = filter_reasons.get(filter_reason, 0) + 1
+                    logger.debug(f"Filtered out: {sgf_file.name} - {filter_reason}")
+
+        logger.info(f"Valid files: {len(sgf_files) - invalid_count} / {len(sgf_files)}")
+        if invalid_count > 0:
+            logger.warning(f"Invalid files: {invalid_count}")
+
+    else:
+        logger.info("Using sequential processing")
+        # Sequential validation and filtering (original implementation)
+        logger.info("Validating SGF files...")
+        valid_files = []
+        invalid_count = 0
+
+        for sgf_file in sgf_files:
+            is_valid, reason = validate_sgf(sgf_file)
+            if is_valid:
+                valid_files.append(sgf_file)
+            else:
+                invalid_count += 1
+                logger.debug(f"Invalid: {sgf_file.name} - {reason}")
+
+        logger.info(f"Valid files: {len(valid_files)} / {len(sgf_files)}")
+        if invalid_count > 0:
+            logger.warning(f"Invalid files: {invalid_count}")
+
+        # Filter by length
+        logger.info(f"Filtering by length ({args.min_moves}-{args.max_moves} moves)...")
+        filtered_files = []
+        filter_reasons = {}
+
+        for sgf_file in valid_files:
+            should_keep, reason = filter_by_length(
+                sgf_file, args.min_moves, args.max_moves
+            )
+            if should_keep:
+                filtered_files.append(sgf_file)
+            else:
+                filter_reasons[reason] = filter_reasons.get(reason, 0) + 1
+                logger.debug(f"Filtered out: {sgf_file.name} - {reason}")
+
+    logger.info(f"After filtering: {len(filtered_files)} files passed")
+    if filter_reasons:
+        for reason, count in filter_reasons.items():
+            logger.info(f"  {reason}: {count}")
 
     # KataGo quality filtering (if requested)
     if args.use_katago:

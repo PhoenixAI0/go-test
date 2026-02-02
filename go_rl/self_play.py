@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -207,12 +208,25 @@ class SelfPlayEngine:
     def generate_games(self) -> List[GameResult]:
         """Generate multiple self-play games.
 
+        Uses parallel processing if parallel_games > 1, otherwise sequential.
+
         Returns:
             List of game results
         """
         if self.model is None:
             self.load_model()
 
+        if self.config.parallel_games > 1:
+            return self._generate_games_parallel()
+        else:
+            return self._generate_games_sequential()
+
+    def _generate_games_sequential(self) -> List[GameResult]:
+        """Generate games sequentially (original implementation).
+
+        Returns:
+            List of game results
+        """
         results: List[GameResult] = []
 
         for game_id in range(self.config.num_games):
@@ -238,6 +252,68 @@ class SelfPlayEngine:
                 logger.error(f"Error in game {game_id}: {e}")
                 continue
 
+        return results
+
+    def _generate_games_parallel(self) -> List[GameResult]:
+        """Generate games in parallel using threading.
+
+        Uses ThreadPoolExecutor to run multiple games concurrently.
+        Threading is used rather than multiprocessing because:
+        1. The model is GPU-bound and benefits from shared GPU access
+        2. GIL is released during model inference
+        3. Avoids overhead of pickling large models
+
+        Returns:
+            List of game results
+        """
+        logger.info(
+            "Generating %d games in parallel (max %d concurrent)",
+            self.config.num_games,
+            self.config.parallel_games,
+        )
+
+        results: List[GameResult] = []
+        completed_count = 0
+
+        with ThreadPoolExecutor(max_workers=self.config.parallel_games) as executor:
+            # Submit all games
+            future_to_game_id = {
+                executor.submit(self.play_game, game_id): game_id
+                for game_id in range(self.config.num_games)
+            }
+
+            # Collect results as they complete
+            for future in as_completed(future_to_game_id):
+                game_id = future_to_game_id[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                    completed_count += 1
+
+                    # Log progress
+                    if completed_count % 10 == 0:
+                        avg_moves = sum(r.move_count for r in results) / len(results)
+                        avg_illegal = sum(r.illegal_move_count for r in results) / len(
+                            results
+                        )
+                        logger.info(
+                            "Progress: %d/%d games | Avg moves: %.1f | Avg illegal: %.1f",
+                            completed_count,
+                            self.config.num_games,
+                            avg_moves,
+                            avg_illegal,
+                        )
+
+                except Exception as e:
+                    logger.error(f"Error in game {game_id}: {e}")
+                    continue
+
+        # Sort results by original game order for consistency
+        logger.info(
+            "Completed %d/%d games in parallel",
+            len(results),
+            self.config.num_games,
+        )
         return results
 
     def save_games_sgf(self, results: List[GameResult], output_dir: Path) -> None:
