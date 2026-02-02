@@ -18,9 +18,10 @@ from go_rl.run_logging import write_run_log
 from go_rl.training_utils import (
     configure_torch_for_speed,
     default_num_workers,
+    get_optimal_attention_backend,
     quantization_kwargs,
 )
-from go_rl.wandb_utils import configure_wandb
+from go_rl.wandb_utils import configure_wandb, finish_wandb, log_system_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,27 @@ def main() -> None:
         action="store_true",
         help="Enable gradient checkpointing for memory efficiency",
     )
+    parser.add_argument(
+        "--use-fp8",
+        action="store_true",
+        help="Use FP8 quantization (1.4x faster RL inference, 60%% less VRAM, 2x longer context)",
+    )
+    parser.add_argument(
+        "--use-dynamic-4bit",
+        action="store_true",
+        help="Use Unsloth Dynamic 4-bit quantization (best accuracy, <10%% more VRAM than BnB)",
+    )
+    parser.add_argument(
+        "--attention-backend",
+        choices=["sdpa", "flash_attention_2", "xformers", "auto"],
+        default="auto",
+        help="Attention backend (auto=SDPA on new GPUs, FA2 on old GPUs)",
+    )
+    parser.add_argument(
+        "--enable-compile",
+        action="store_true",
+        help="Enable torch.compile for 10%% faster training + 2x faster compile time",
+    )
     args = parser.parse_args()
 
     setup_logging(args.log_level)
@@ -173,24 +195,68 @@ def main() -> None:
         from unsloth import FastLanguageModel
     except ImportError as exc:
         raise RuntimeError("Missing dependencies for GRPO training.") from exc
-    configure_torch_for_speed()
 
+    # Configure PyTorch for optimal performance (RL-specific optimizations)
+    attention_backend = args.attention_backend if args.attention_backend != "auto" else get_optimal_attention_backend()
+    configure_torch_for_speed(
+        enable_compile=args.enable_compile,
+        attention_backend=attention_backend,
+    )
+
+    # Prepare wandb configuration with hyperparameters
     run_name = f"grpo_{Path(args.config).stem}"
+    quant_type = "fp8" if args.use_fp8 else "dynamic-4bit" if args.use_dynamic_4bit else f"{train_cfg.quantization_bits}bit"
+    wandb_config = {
+        "model_name": train_cfg.model_name,
+        "max_seq_length": train_cfg.max_seq_length,
+        "quantization": quant_type,
+        "use_lora": train_cfg.use_lora,
+        "lora_rank": train_cfg.lora_rank if train_cfg.use_lora else None,
+        "lora_alpha": train_cfg.lora_alpha if train_cfg.use_lora else None,
+        "learning_rate": train_cfg.learning_rate,
+        "batch_size": train_cfg.batch_size,
+        "gradient_accumulation": train_cfg.gradient_accumulation,
+        "num_steps": train_cfg.num_steps,
+        "use_8bit_optimizer": train_cfg.use_8bit_optimizer,
+        "gradient_checkpointing": args.gradient_checkpointing,
+        "attention_backend": attention_backend or "default",
+        "torch_compile": args.enable_compile,
+        "grpo_mini_batch": train_cfg.grpo_mini_batch,
+        "grpo_logit_chunk_multiplier": train_cfg.grpo_logit_chunk_multiplier,
+        "num_samples": rollout_cfg.num_samples,
+        "temperature": rollout_cfg.temperature,
+        "reward_config": asdict(reward_cfg),
+    }
+    wandb_tags = ["grpo", "rl", quant_type]
+    if args.use_fp8:
+        wandb_tags.extend(["fp8", "fp8-rl"])
+    if args.enable_compile:
+        wandb_tags.append("torch-compile")
+    if train_cfg.grpo_mini_batch or train_cfg.grpo_logit_chunk_multiplier:
+        wandb_tags.append("memory-optimized")
+
     wandb_enabled = configure_wandb(
         args.wandb,
         run_name,
         project=args.wandb_project,
         entity=args.wandb_entity,
         mode=args.wandb_mode,
+        config=wandb_config,
+        tags=wandb_tags,
+        notes=f"GRPO RL training with {quant_type} quantization on {train_cfg.model_name}",
     )
 
-    logger.info("Loading model %s", train_cfg.model_name)
+    logger.info("Loading model %s with %s quantization", train_cfg.model_name, quant_type)
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=train_cfg.model_name,
         max_seq_length=train_cfg.max_seq_length,
-        dtype=None,
-        **quantization_kwargs(train_cfg.quantization_bits),
-        fast_inference=True,
+        dtype=None,  # Auto-select optimal dtype
+        **quantization_kwargs(
+            train_cfg.quantization_bits,
+            use_dynamic=args.use_dynamic_4bit,
+            use_fp8=args.use_fp8,
+        ),
+        fast_inference=True,  # Enable fast inference for RL rollouts
     )
 
     # Apply LoRA with optimized parameters (only if use_lora=True)
@@ -328,9 +394,23 @@ def main() -> None:
             args=GRPOConfig(**trainer_args),
         )
 
-        trainer.train()
+        # Train with periodic GPU metrics logging
+        logger.info("Starting GRPO training...")
+        try:
+            trainer.train()
+            logger.info("GRPO training completed successfully")
+        finally:
+            # Log final GPU metrics
+            if wandb_enabled and is_main_process:
+                log_system_metrics()
+
         logger.info("Saving model to %s", train_cfg.output_dir)
         trainer.save_model(train_cfg.output_dir)
+
+        # Finish wandb run on main process
+        if wandb_enabled and is_main_process:
+            finish_wandb()
+
     finally:
         if is_main_process and katago is not None:
             logger.info("Stopping KataGo")
