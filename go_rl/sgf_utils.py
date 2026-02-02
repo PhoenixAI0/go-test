@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 import logging
+import multiprocessing as mp
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
 from .board import BoardState, coords_to_gtp
 
 logger = logging.getLogger(__name__)
+
+
+def _get_num_workers() -> int:
+    """Get optimal number of worker processes for parallel processing."""
+    try:
+        cpu_count = mp.cpu_count()
+        return max(1, cpu_count - 1)
+    except NotImplementedError:
+        return 4
 
 
 @dataclass
@@ -96,10 +107,77 @@ def sample_positions(game: SgfGame, max_positions: int) -> List[dict]:
     return samples
 
 
-def iter_sgf_samples(sgf_dir: str, max_positions: int) -> Iterable[dict]:
+def _process_sgf_file(path: Path, max_positions_per_file: int) -> List[dict]:
+    """Process a single SGF file and return samples.
+
+    This function is designed to be pickled for multiprocessing.
+
+    Args:
+        path: Path to SGF file
+        max_positions_per_file: Maximum positions to sample from this file
+
+    Returns:
+        List of samples from the file
+    """
+    try:
+        game = load_sgf(str(path))
+        samples = sample_positions(game, max_positions=max_positions_per_file)
+        return samples
+    except Exception as exc:
+        logger.warning("Skipping SGF file %s: %s", path, exc)
+        return []
+
+
+def iter_sgf_samples(
+    sgf_dir: str, max_positions: int, num_workers: int = 0, use_parallel: bool = True
+) -> Iterable[dict]:
+    """Iterate over SGF samples from a directory.
+
+    Args:
+        sgf_dir: Directory containing SGF files
+        max_positions: Maximum total positions to collect
+        num_workers: Number of parallel workers (0 = auto-detect, 1 = sequential)
+        use_parallel: Whether to use parallel processing
+
+    Yields:
+        Sample dictionaries with prompt, target, player, board_size
+    """
     logger.info("Scanning SGF directory %s", sgf_dir)
+    sgf_files = sorted(Path(sgf_dir).glob("**/*.sgf"))
+    total_files = len(sgf_files)
+    logger.info("Found %d SGF files", total_files)
+
+    if total_files == 0:
+        logger.warning("No SGF files found in %s", sgf_dir)
+        return
+
+    # Determine number of workers
+    if num_workers == 0:
+        num_workers = _get_num_workers()
+
+    # Use parallel processing for multiple files
+    if use_parallel and num_workers > 1 and total_files > 1:
+        logger.info("Using parallel processing with %d workers", num_workers)
+        yield from _iter_sgf_samples_parallel(sgf_files, max_positions, num_workers)
+    else:
+        logger.info("Using sequential processing")
+        yield from _iter_sgf_samples_sequential(sgf_files, max_positions)
+
+
+def _iter_sgf_samples_sequential(
+    sgf_files: List[Path], max_positions: int
+) -> Iterable[dict]:
+    """Sequential SGF processing (original implementation).
+
+    Args:
+        sgf_files: List of SGF file paths
+        max_positions: Maximum total positions to collect
+
+    Yields:
+        Sample dictionaries
+    """
     collected = 0
-    for path in sorted(Path(sgf_dir).glob("**/*.sgf")):
+    for path in sgf_files:
         if collected >= max_positions:
             break
         try:
@@ -108,11 +186,7 @@ def iter_sgf_samples(sgf_dir: str, max_positions: int) -> Iterable[dict]:
             logger.warning("Skipping SGF file %s: %s", path, exc)
             continue
         remaining = max_positions - collected
-        logger.debug(
-            "Sampling %d remaining positions from %s",
-            remaining,
-            path,
-        )
+        logger.debug("Sampling %d remaining positions from %s", remaining, path)
         try:
             samples = sample_positions(game, max_positions=remaining)
         except Exception as exc:
@@ -123,6 +197,64 @@ def iter_sgf_samples(sgf_dir: str, max_positions: int) -> Iterable[dict]:
             collected += 1
             if collected >= max_positions:
                 break
+
+
+def _iter_sgf_samples_parallel(
+    sgf_files: List[Path], max_positions: int, num_workers: int
+) -> Iterable[dict]:
+    """Parallel SGF processing using multiprocessing.
+
+    Args:
+        sgf_files: List of SGF file paths
+        max_positions: Maximum total positions to collect
+        num_workers: Number of parallel workers
+
+    Yields:
+        Sample dictionaries
+    """
+    # Estimate positions per file for better work distribution
+    total_files = len(sgf_files)
+    estimated_positions_per_file = max(1, max_positions // total_files)
+
+    # Process files in batches to avoid memory issues
+    batch_size = max(1, num_workers * 4)
+    collected = 0
+
+    with mp.Pool(processes=num_workers) as pool:
+        # Process in batches
+        for batch_start in range(0, total_files, batch_size):
+            if collected >= max_positions:
+                break
+
+            batch_end = min(batch_start + batch_size, total_files)
+            batch_files = sgf_files[batch_start:batch_end]
+
+            remaining = max_positions - collected
+            positions_per_file = max(1, remaining // len(batch_files))
+
+            logger.debug(
+                "Processing batch %d-%d of %d files (up to %d positions per file)",
+                batch_start,
+                batch_end,
+                total_files,
+                positions_per_file,
+            )
+
+            # Process batch in parallel
+            process_func = partial(_process_sgf_file, max_positions_per_file=positions_per_file)
+            results = pool.map(process_func, batch_files)
+
+            # Yield samples from results
+            for samples in results:
+                if collected >= max_positions:
+                    break
+                for sample in samples:
+                    if collected >= max_positions:
+                        break
+                    yield sample
+                    collected += 1
+
+            logger.debug("Collected %d / %d positions so far", collected, max_positions)
 
 
 def load_sgf_dir(sgf_dir: str, max_positions: int) -> List[dict]:
