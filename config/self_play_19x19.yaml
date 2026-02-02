@@ -1,0 +1,44 @@
+# Self-Play Configuration for 19x19 Go
+# Generate training data by having the model play against itself
+
+# Path to trained model checkpoint
+# Should be a directory containing adapter_config.json and adapter_model.safetensors
+model_path: outputs/grpo_19x19/final
+
+# Board configuration
+board_size: 19
+
+# Number of games to generate
+# More games = more diverse training data
+# Recommended: 500-2000 for curriculum learning
+num_games: 500
+
+# Maximum moves per game
+# Games exceeding this limit will be truncated
+# 19x19 games typically have 150-350 moves
+max_moves: 400
+
+# Sampling configuration
+# Higher temperature = more exploration (varied play)
+# Lower temperature = more exploitation (stronger play)
+temperature: 0.9
+
+# Top-p (nucleus) sampling
+# Only sample from top p probability mass
+# Lower = more conservative, higher = more creative
+top_p: 0.9
+
+# Maximum tokens to generate per move
+# Should be enough for "Q16" or "PASS" plus some buffer
+max_tokens: 10
+
+# Output directory for SGF files
+output_dir: data/self_play/19x19
+
+# Parallel game generation (experimental)
+# Currently only supports 1 (sequential generation)
+parallel_games: 1
+
+# Random seed for reproducibility
+# Set to null for random seed
+seed: 42

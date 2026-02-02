@@ -122,16 +122,22 @@ Both training scripts support these flags:
 
 Edit the YAML config files to adjust hyperparameters:
 
-**For SFT:**
+**For SFT (9x9):**
 ```bash
 vim config/sft_warm_start.yaml
+```
+
+**For SFT (19x19):**
+```bash
+vim config/sft_warm_start_19x19.yaml
 ```
 
 Key parameters:
 - `model_name`: Model to fine-tune (default: `qwen-3-8b`)
 - `epochs`: Number of training epochs
-- `batch_size`: Batch size per device
+- `batch_size`: Batch size per device (lower for 19x19 due to memory)
 - `learning_rate`: Learning rate for optimizer
+- `max_seq_length`: Maximum sequence length (4096 for 19x19, 1024 for 9x9)
 
 **For GRPO:**
 ```bash
