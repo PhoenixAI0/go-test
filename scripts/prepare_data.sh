@@ -38,7 +38,7 @@ fi
 if command -v go &> /dev/null; then
     if [ ! -x go_parser/sgf_parser ]; then
         echo -e "${YELLOW}Building Go SGF parser...${NC}"
-        (cd go_parser && go build -o sgf_parser main.go)
+        (cd go_parser && go build -o sgf_parser .)
     fi
 else
     echo -e "${YELLOW}Go not available; using Python SGF parsing${NC}"

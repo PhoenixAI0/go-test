@@ -1,0 +1,70 @@
+package main
+
+import (
+	"os"
+	"testing"
+)
+
+func writeTempSGF(t *testing.T, content string) string {
+	t.Helper()
+	file, err := os.CreateTemp("", "sgf_*.sgf")
+	if err != nil {
+		t.Fatalf("create temp sgf: %v", err)
+	}
+	if _, err := file.WriteString(content); err != nil {
+		file.Close()
+		os.Remove(file.Name())
+		t.Fatalf("write temp sgf: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(file.Name())
+		t.Fatalf("close temp sgf: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(file.Name()) })
+	return file.Name()
+}
+
+func TestParseSGFSetupStonesRange(t *testing.T) {
+	path := writeTempSGF(t, "(;GM[1]FF[4]SZ[5]AB[aa:ab]AW[cc];B[dd])")
+	game, err := parseSGFFile(path)
+	if err != nil {
+		t.Fatalf("parse SGF: %v", err)
+	}
+	if game.BoardSize != 5 {
+		t.Fatalf("expected board size 5, got %d", game.BoardSize)
+	}
+	if len(game.SetupStones) != 3 {
+		t.Fatalf("expected 3 setup stones, got %d", len(game.SetupStones))
+	}
+	if len(game.Moves) != 1 {
+		t.Fatalf("expected 1 move, got %d", len(game.Moves))
+	}
+}
+
+func TestParseSGFVariationsMainLine(t *testing.T) {
+	path := writeTempSGF(t, "(;GM[1]FF[4]SZ[5];B[aa](;W[bb];B[cc])(;W[dd];B[ee]))")
+	game, err := parseSGFFile(path)
+	if err != nil {
+		t.Fatalf("parse SGF: %v", err)
+	}
+	if len(game.Moves) != 3 {
+		t.Fatalf("expected 3 moves, got %d", len(game.Moves))
+	}
+	if game.Moves[1].Player != "W" || game.Moves[1].Coords == nil {
+		t.Fatalf("expected second move to be W with coords")
+	}
+}
+
+func TestParseSGFF3PassMove(t *testing.T) {
+	path := writeTempSGF(t, "(;GM[1]FF[3]SZ[19];B[dd];W[tt];B[pp])")
+	game, err := parseSGFFile(path)
+	if err != nil {
+		t.Fatalf("parse SGF: %v", err)
+	}
+	if len(game.Moves) != 3 {
+		t.Fatalf("expected 3 moves, got %d", len(game.Moves))
+	}
+	if game.Moves[1].Coords != nil {
+		t.Fatalf("expected FF[3] tt move to be PASS")
+	}
+}

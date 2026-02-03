@@ -1,6 +1,6 @@
 # Fast SGF Parser (Go)
 
-This is an optional high-performance SGF parser written in Go for maximum speed.
+This is an optional high-performance SGF parser written in Go for maximum speed, with output parity to the Python pipeline.
 
 ## Why Go?
 
@@ -13,7 +13,7 @@ This is an optional high-performance SGF parser written in Go for maximum speed.
 
 ```bash
 cd go_parser
-go build -o sgf_parser main.go
+go build -o sgf_parser .
 ```
 
 This creates a `sgf_parser` binary that can be used from Python or directly.
@@ -39,6 +39,12 @@ On a typical dataset:
 
 For very large datasets (100k+ SGF files), the Go parser provides significant speedup.
 
-## Note
+## Parity Notes
 
-This parser uses a simplified board state representation. For production use with complex SGF features (handicap stones, variations, etc.), consider using a full SGF library or the Python sgfmill-based parser.
+The Go parser now mirrors the Python dataset builder behavior:
+
+- Main-line SGF parsing (first variation).
+- Setup stones (`AB`/`AW`, including ranges like `aa:cc`).
+- Board state updates with capture/suicide handling (as in `go_rl.board`).
+- Prompt formatting identical to `BoardState.to_prompt()`.
+- JSONL schema matches Python (`prompt`, `response`, `board_size`).

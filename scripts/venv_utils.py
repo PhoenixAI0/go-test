@@ -92,7 +92,7 @@ def ensure_go_parser_binary() -> Path | None:
 
     try:
         subprocess.run(
-            [go_bin, "build", "-o", str(binary_path), "main.go"],
+            [go_bin, "build", "-o", str(binary_path), "."],
             cwd=str(parser_dir),
             check=True,
         )

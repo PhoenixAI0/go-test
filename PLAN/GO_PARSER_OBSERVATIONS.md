@@ -5,7 +5,7 @@ This note summarizes all technical observations about the current Go implementat
 ## Files and Entry Points
 
 - `go_parser/main.go` is the sole Go source and the CLI entry point.
-- `go_parser/sgf_parser` is a prebuilt binary (ELF 64-bit, statically linked, with debug info). It is produced by `go build -o sgf_parser main.go`.
+- `go_parser/sgf_parser` is a prebuilt binary (ELF 64-bit, statically linked, with debug info). It is produced by `go build -o sgf_parser .`.
 - `go_parser/README.md` documents expected performance claims and usage.
 
 ## High-Level Pipeline (Go)
@@ -103,7 +103,7 @@ This note summarizes all technical observations about the current Go implementat
 ## Integration Notes
 
 - `scripts/fast_build_dataset.py` will use the Go parser via `scripts/venv_utils.py` if a working `go_parser/sgf_parser` binary is present; otherwise it falls back to Python.
-- `scripts/prepare_data.sh` builds the Go parser binary if missing (`go build -o sgf_parser main.go`).
+- `scripts/prepare_data.sh` builds the Go parser binary if missing (`go build -o sgf_parser .`).
 - The Go parser is explicitly described in `go_parser/README.md` as a **simplified** parser and not fully SGF-complete.
 
 ## Opportunities / Implications

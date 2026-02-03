@@ -85,7 +85,7 @@ python scripts/fast_build_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x
 Optional Go parser build (scripts will attempt install/build automatically if Go is missing):
 ```bash
 cd go_parser
-go build -o sgf_parser main.go
+go build -o sgf_parser .
 ```
 
 SGF download and validation helpers:
