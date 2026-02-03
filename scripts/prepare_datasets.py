@@ -3,12 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 from typing import List
 
 from go_rl.sgf_utils import iter_sgf_samples
 from go_rl.logging_utils import setup_logging
-from venv_utils import ensure_virtualenv
+from venv_utils import ensure_virtualenv, run_go_parser
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,13 @@ def _write_jsonl_batch(handle, records: List[dict]) -> None:
         return
     lines = [json.dumps(record) + "\n" for record in records]
     handle.write("".join(lines))
+
+
+def _resolve_num_workers(requested: int) -> int:
+    if requested and requested > 0:
+        return requested
+    cpu_count = os.cpu_count() or 1
+    return max(1, cpu_count - 1)
 
 
 def main() -> None:
@@ -38,6 +46,11 @@ def main() -> None:
         "--no-parallel",
         action="store_true",
         help="Disable parallel processing",
+    )
+    parser.add_argument(
+        "--no-go-parser",
+        action="store_true",
+        help="Disable Go parser (use Python parsing)",
     )
     parser.add_argument(
         "--batch-size",
@@ -64,45 +77,88 @@ def main() -> None:
     sft_path.parent.mkdir(parents=True, exist_ok=True)
     rl_path.parent.mkdir(parents=True, exist_ok=True)
 
+    num_workers = _resolve_num_workers(args.num_workers)
     count = 0
     sft_batch: List[dict] = []
     rl_batch: List[dict] = []
+
+    go_parser_output = output_root / f"__go_parser_{args.tag}.jsonl"
+    used_go_parser = False
+
+    if not args.no_go_parser:
+        logger.info("Attempting Go parser build for faster dataset generation")
+        used_go_parser = run_go_parser(
+            sgf_dir=args.sgf_dir,
+            output_path=str(go_parser_output),
+            max_positions=args.max_positions,
+            num_workers=num_workers,
+        )
 
     with (
         sft_path.open("w", encoding="utf-8", buffering=8192 * 16) as sft_handle,
         rl_path.open("w", encoding="utf-8", buffering=8192 * 16) as rl_handle,
     ):
-        for sample in iter_sgf_samples(
-            args.sgf_dir,
-            max_positions=args.max_positions,
-            num_workers=args.num_workers,
-            use_parallel=not args.no_parallel,
-        ):
-            sft_record = {
-                "prompt": sample["prompt"],
-                "response": sample["target"],
-                "board_size": sample["board_size"],
-            }
-            rl_record = {"prompt": sample["prompt"]}
+        if used_go_parser:
+            logger.info("Processing Go parser output: %s", go_parser_output)
+            with go_parser_output.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    sample = json.loads(line)
+                    sft_record = {
+                        "prompt": sample["prompt"],
+                        "response": sample["response"],
+                        "board_size": sample.get("board_size"),
+                    }
+                    rl_record = {"prompt": sample["prompt"]}
 
-            sft_batch.append(sft_record)
-            rl_batch.append(rl_record)
-            count += 1
+                    sft_batch.append(sft_record)
+                    rl_batch.append(rl_record)
+                    count += 1
 
-            # Write batches when full
-            if len(sft_batch) >= args.batch_size:
-                _write_jsonl_batch(sft_handle, sft_batch)
-                _write_jsonl_batch(rl_handle, rl_batch)
-                sft_batch = []
-                rl_batch = []
+                    if len(sft_batch) >= args.batch_size:
+                        _write_jsonl_batch(sft_handle, sft_batch)
+                        _write_jsonl_batch(rl_handle, rl_batch)
+                        sft_batch = []
+                        rl_batch = []
 
-                if count % 10000 == 0:
-                    logger.info("Written %d samples...", count)
+                        if count % 10000 == 0:
+                            logger.info("Written %d samples...", count)
+        else:
+            for sample in iter_sgf_samples(
+                args.sgf_dir,
+                max_positions=args.max_positions,
+                num_workers=args.num_workers,
+                use_parallel=not args.no_parallel,
+            ):
+                sft_record = {
+                    "prompt": sample["prompt"],
+                    "response": sample["target"],
+                    "board_size": sample["board_size"],
+                }
+                rl_record = {"prompt": sample["prompt"]}
+
+                sft_batch.append(sft_record)
+                rl_batch.append(rl_record)
+                count += 1
+
+                # Write batches when full
+                if len(sft_batch) >= args.batch_size:
+                    _write_jsonl_batch(sft_handle, sft_batch)
+                    _write_jsonl_batch(rl_handle, rl_batch)
+                    sft_batch = []
+                    rl_batch = []
+
+                    if count % 10000 == 0:
+                        logger.info("Written %d samples...", count)
 
         # Write remaining batches
         if sft_batch:
             _write_jsonl_batch(sft_handle, sft_batch)
             _write_jsonl_batch(rl_handle, rl_batch)
+
+    if used_go_parser and go_parser_output.exists():
+        go_parser_output.unlink()
 
     logger.info("Wrote %d SFT samples to %s", count, sft_path)
     logger.info("Wrote %d RL prompts to %s", count, rl_path)

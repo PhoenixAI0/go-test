@@ -13,7 +13,7 @@
 - `test.py` is a scratch file, not a test suite.
 
 ## Build, Test, and Development Commands
-This repo is Python-first; there is no build step.
+This repo is Python-first. There is no required build step for the core pipeline, but the optional Go SGF parser (`go_parser/sgf_parser`) can be compiled for faster dataset building. Scripts will attempt to install Go and compile it by default when Go is missing.
 
 Setup and validation:
 - `./scripts/setup_environment.sh` creates `.venv`, installs deps, downloads KataGo, and writes `.env` (Linux + NVIDIA GPU).

@@ -15,8 +15,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -25,30 +23,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from go_rl.data_prep import build_sft_dataset
 from go_rl.logging_utils import setup_logging
-from venv_utils import ensure_virtualenv
+from venv_utils import ensure_virtualenv, ensure_go_parser_binary, run_go_parser
 
 logger = logging.getLogger(__name__)
-
-
-def find_go_parser() -> Path | None:
-    """Find the Go SGF parser binary if available.
-
-    Returns:
-        Path to binary or None if not found
-    """
-    # Check in go_parser directory
-    repo_root = Path(__file__).parent.parent
-    go_parser_path = repo_root / "go_parser" / "sgf_parser"
-
-    if go_parser_path.exists() and os.access(go_parser_path, os.X_OK):
-        return go_parser_path
-
-    # Check in PATH
-    go_parser_in_path = shutil.which("sgf_parser")
-    if go_parser_in_path:
-        return Path(go_parser_in_path)
-
-    return None
 
 
 def build_with_go_parser(
@@ -57,55 +34,14 @@ def build_with_go_parser(
     max_positions: int,
     num_workers: int,
 ) -> bool:
-    """Build dataset using the Go parser.
-
-    Args:
-        sgf_dir: Directory containing SGF files
-        output: Output file path
-        max_positions: Maximum positions to collect
-        num_workers: Number of workers
-
-    Returns:
-        True if successful, False otherwise
-    """
-    go_parser = find_go_parser()
-    if not go_parser:
-        logger.warning("Go parser not found")
-        return False
-
-    logger.info("Using Go parser: %s", go_parser)
-
-    cmd = [
-        str(go_parser),
-        "-sgf-dir",
-        sgf_dir,
-        "-output",
-        output,
-        "-max-positions",
-        str(max_positions),
-        "-workers",
-        str(num_workers),
-    ]
-
-    try:
-        result = subprocess.run(
-            cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        logger.info("Go parser output:\n%s", result.stdout)
-        if result.stderr:
-            logger.warning("Go parser stderr:\n%s", result.stderr)
-        return True
-    except subprocess.CalledProcessError as e:
-        logger.error("Go parser failed: %s", e)
-        logger.error("Stdout: %s", e.stdout)
-        logger.error("Stderr: %s", e.stderr)
-        return False
-    except Exception as e:
-        logger.error("Error running Go parser: %s", e)
-        return False
+    """Build dataset using the Go parser."""
+    logger.info("Using Go parser")
+    return run_go_parser(
+        sgf_dir=sgf_dir,
+        output_path=output,
+        max_positions=max_positions,
+        num_workers=num_workers,
+    )
 
 
 def estimate_dataset_size(sgf_dir: str) -> int:
@@ -214,11 +150,10 @@ Performance:
     elif args.no_go_parser:
         logger.info("Go parser disabled by user")
     else:
-        # Auto-detect best method
-        go_parser = find_go_parser()
-        if go_parser and num_files >= 1000:
+        go_parser = ensure_go_parser_binary()
+        if go_parser:
             use_go_parser = True
-            logger.info("Auto-selected Go parser (large dataset)")
+            logger.info("Defaulting to Go parser")
         elif num_files >= 10:
             logger.info("Auto-selected Python parallel processing")
         else:

@@ -17,7 +17,7 @@ import (
 // Sample represents a single training sample
 type Sample struct {
 	Prompt    string `json:"prompt"`
-	Target    string `json:"target"`
+	Response  string `json:"response"`
 	Player    string `json:"player"`
 	BoardSize int    `json:"board_size"`
 }
@@ -141,14 +141,14 @@ func processSGFFile(filename string, maxSamples int) ([]Sample, error) {
 			break
 		}
 
-		target := "PASS"
+		response := "PASS"
 		if !move.IsPass {
-			target = coordsToGTP(move.Row, move.Col, game.BoardSize)
+			response = coordsToGTP(move.Row, move.Col, game.BoardSize)
 		}
 
 		sample := Sample{
 			Prompt:    generateBoardPrompt(game.BoardSize, i),
-			Target:    target,
+			Response:  response,
 			Player:    move.Player,
 			BoardSize: game.BoardSize,
 		}
