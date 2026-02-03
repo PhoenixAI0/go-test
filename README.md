@@ -1,172 +1,189 @@
 # Go RL Training Utilities
 
 This repo provides Go RL data prep, prompting utilities, and training entry points
-for SFT and GRPO using KataGo-based rewards.
+for SFT and GRPO using KataGo-based rewards. It also includes optional Go tooling
+for fast SGF parsing, self-play generation, and evaluation helpers.
 
-## 🚀 Quick Start
+**Repo layout**
+- `go_rl/` core Python library.
+- `go_parser/` optional Go SGF parser (builds a `sgf_parser` binary).
+- `scripts/` setup, data prep, training, self-play, evaluation, and utilities.
+- `config/` training and self-play YAML configs, plus `config/accelerate/` for multi-GPU.
+- `data/` SGF inputs and generated JSONL datasets.
+- `outputs/` model checkpoints.
+- `logs/` run logs.
+- `tests/` pytest suite.
 
-**New to this project? Start here:** [**QUICKSTART.md**](QUICKSTART.md)
+## Quick Start (Linux + NVIDIA GPU)
 
-The quick start guide provides step-by-step instructions for setting up and training on a fresh server using automated scripts.
-
-### Automated Setup (Recommended)
-
+1. Setup environment (creates `.venv`, installs deps, downloads KataGo, writes `.env`):
 ```bash
-# 1. Setup environment (installs everything)
 ./scripts/setup_environment.sh
+```
 
-# 2. Add SGF files to data/sgf_9x9/ or data/sgf_19x19/
-# See scripts/download_sample_sgf.sh --help for sources
+2. Add SGF files to `data/sgf_9x9/` or `data/sgf_19x19/`.
 
-# 3. Prepare datasets
+3. Build datasets:
+```bash
 ./scripts/prepare_data.sh
-
-# 4. Train (SFT + GRPO in sequence)
-./scripts/run_full_pipeline.sh --smoke  # smoke test first
-./scripts/run_full_pipeline.sh          # full training
 ```
 
-Or train individually:
+4. Run smoke tests:
 ```bash
-./scripts/train_sft.sh --smoke    # SFT warm start
-./scripts/train_grpo.sh --smoke   # RL training
+./scripts/train_sft.sh --smoke
+./scripts/train_grpo.sh --smoke
 ```
 
-## Shell Script Usage
-
-These scripts live at repo root. If a script supports flags, it also supports `--help`.
-
-Setup and validation:
+5. Run the full pipeline (optional):
 ```bash
-./scripts/setup_environment.sh       # installs deps + KataGo, writes .env
-./scripts/verify_setup.sh            # checks venv, CUDA, KataGo, data
+./scripts/run_full_pipeline.sh
 ```
 
-SGF ingestion and dataset prep:
+If you want to verify your setup at any point:
 ```bash
-./scripts/download_sample_sgf.sh --board-size 9x9   # manual download guidance
-./scripts/download_sample_sgf.sh --board-size 19x19
-./scripts/prepare_data.sh                          # builds data/sft_*.jsonl + data/rl_prompts_*.jsonl
-```
-
-Training helpers:
-```bash
-./scripts/train_sft.sh --smoke --board-size 9x9 --wandb --wandb-project go-rl
-./scripts/train_grpo.sh --smoke --board-size 9x9 --wandb --wandb-project go-rl
-```
-
-Multi-GPU examples:
-```bash
-./scripts/train_sft.sh --multi-gpu 4 --gradient-checkpointing
-./scripts/train_grpo.sh --multi-gpu 4
-./scripts/train_sft.sh --multi-gpu auto
-```
-
-Full pipeline:
-```bash
-./scripts/run_full_pipeline.sh --smoke
-./scripts/run_full_pipeline.sh --board-size 19x19 --wandb
-./scripts/run_full_pipeline.sh --skip-setup --skip-data
+./scripts/verify_setup.sh
 ```
 
 ## Manual Setup
 
-If you prefer manual setup:
-
-### Requirements
+Requirements:
 - Python 3.10+
-- Dependencies: `datasets`, `trl`, `unsloth`, `sgfmill`, `pyyaml`, plus `torch`
-- KataGo: install KataGo locally and export paths for configs:
-  - `KATAGO_BIN`
-  - `KATAGO_MODEL`
-  - `KATAGO_CONFIG`
+- NVIDIA GPU with CUDA for training (setup script is optimized for Linux)
+- KataGo binary + model + config (the setup script creates `.env` with paths)
 
-### Installation
-
+Manual install with `uv`:
 ```bash
-# Using uv
-uv venv .venv
+uv venv .venv --python 3.11
 source .venv/bin/activate
 uv pip install -r requirements.txt
 uv pip install -e .
 ```
 
-## Data Expectations
-- SGF files should live under a directory like `data/sgf_9x9` or `data/sgf_19x19`.
-- Dataset builders write JSONL files under `data/`.
+## Data Preparation
 
-Build datasets:
+Expected SGF directories:
+- `data/sgf_9x9/`
+- `data/sgf_19x19/`
+
+Dataset helpers:
+```bash
+python scripts/prepare_datasets.py --sgf-dir data/sgf_9x9 --output-dir data --tag 9x9
+python scripts/prepare_datasets.py --sgf-dir data/sgf_19x19 --output-dir data --tag 19x19
+```
+
+Individual builders:
 ```bash
 python scripts/build_sft_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl
 python scripts/build_rl_prompts.py --sgf-dir data/sgf_9x9 --output data/rl_prompts_9x9.jsonl
 ```
 
-Or use the combined helper:
+Fast builder (auto-uses Go parser if present):
 ```bash
-python scripts/prepare_datasets.py --sgf-dir data/sgf_9x9 --tag 9x9
+python scripts/fast_build_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl
+```
+
+Optional Go parser build:
+```bash
+cd go_parser
+go build -o sgf_parser main.go
+```
+
+SGF download and validation helpers:
+```bash
+./scripts/download_sample_sgf.sh --board-size 9x9
+python scripts/download_sgf.py --manual-instructions --board-size 9
+python scripts/download_sgf.py --validate-only --board-size 9
 ```
 
 ## Training
-SFT warm start:
+
+Shell wrappers (recommended):
+```bash
+./scripts/train_sft.sh --board-size 9x9
+./scripts/train_grpo.sh --board-size 9x9
+```
+
+Common flags:
+- `--smoke` for short sanity runs.
+- `--wandb` and `--wandb-project` for W&B logging.
+- `--debug` for verbose logs.
+- `--gradient-checkpointing` for memory savings.
+- `--multi-gpu 2|4|8|auto` for DDP via `accelerate`.
+
+Direct Python entry points:
 ```bash
 python scripts/run_sft.py --config config/sft_warm_start.yaml
-```
-
-GRPO training:
-```bash
+python scripts/run_sft.py --config config/sft_warm_start_19x19.yaml
 python scripts/run_grpo.py --config config/grpo_9x9.yaml
+python scripts/run_grpo.py --config config/grpo_19x19.yaml
 ```
 
-Smoke checks (short runs for wiring verification):
+Multi-GPU helpers:
 ```bash
-python scripts/run_sft.py --config config/sft_warm_start.yaml --smoke
-python scripts/run_grpo.py --config config/grpo_9x9.yaml --smoke
-```
-
-Verbose logging and W&B reporting:
-```bash
-python scripts/run_sft.py --config config/sft_warm_start.yaml --log-level DEBUG
-python scripts/run_sft.py --config config/sft_warm_start.yaml --wandb --wandb-project go-rl
-```
-
-### Multi-GPU Training
-
-Train on multiple GPUs using Distributed Data Parallel (DDP):
-
-```bash
-# Check available GPUs
-nvidia-smi
 python scripts/check_gpu_setup.py
-
-# SFT Training with multiple GPUs
-./scripts/train_sft.sh --multi-gpu 2    # 2 GPUs
-./scripts/train_sft.sh --multi-gpu 4    # 4 GPUs
-./scripts/train_sft.sh --multi-gpu 8    # 8 GPUs
-
-# GRPO Training with multiple GPUs
-./scripts/train_grpo.sh --multi-gpu 4
-
-# With gradient checkpointing for memory efficiency
-./scripts/train_sft.sh --multi-gpu 4 --gradient-checkpointing
+python scripts/validate_multi_gpu.py --verbose
 ```
 
-**Performance:** Near-linear speedup (2 GPUs ≈ 2x faster, 4 GPUs ≈ 4x faster)
+## Self-Play
 
-**Requirements:**
-- Homogeneous GPUs recommended (same model/memory)
-- Works with Unsloth's 8-bit quantization
-- FSDP not supported (Unsloth limitation)
+Generate self-play SGFs:
+```bash
+python scripts/run_self_play.py --config config/self_play_9x9.yaml
+```
 
-See [Multi-GPU Guide](docs/MULTI_GPU_GUIDE.md) for detailed usage, performance tuning, and troubleshooting.
+Filter or validate self-play games:
+```bash
+python scripts/filter_self_play_games.py --input data/self_play/9x9 --output data/self_play/9x9_filtered
+```
+
+## Evaluation
+
+Create a KataGo match config and run evaluation:
+```bash
+python scripts/create_match_config.py \
+  --output config/match_9x9.cfg \
+  --board-size 9 \
+  --num-games 200 \
+  --model-command "/path/to/your_gtp_engine --model outputs/grpo_9x9/final"
+
+python scripts/eval_elo.py --katago-bin $KATAGO_BIN --match-config config/match_9x9.cfg
+```
+
+## Interactive Play
+
+Play against a trained model in the terminal:
+```bash
+python scripts/play_interactive.py --model outputs/grpo_9x9/final
+```
+
+## Upload to Hugging Face Hub
+
+Upload a trained model or LoRA adapter:
+```bash
+python scripts/upload_to_hub.py --model outputs/grpo_9x9/final --repo-id username/go-rl-9x9-grpo --board-size 9
+```
+
+## Tests
+
+Run the full test suite:
+```bash
+pytest
+```
+
+Skip KataGo integration tests:
+```bash
+pytest -m "not katago"
+```
+
+Run only KataGo integration tests (requires `.env`):
+```bash
+pytest -m katago
+```
 
 ## Outputs and Logs
-- Model outputs live under `outputs/` (configurable via `output_dir`).
-- Run logs are JSON files under `logs/` (configurable via `log_dir`) and include
-  dependency versions plus GPU availability.
 
-## Experiment Gate
-- The 9x9 config includes a promotion gate (Elo delta or winrate threshold).
-- Run 19x19 after the 9x9 gate is satisfied.
+- Model outputs are stored under `outputs/`.
+- Run logs are stored under `logs/`.
+- Datasets are written to `data/`.
 
-## Rewards
-- `reward.strict_legality` enables ko/suicide checks in move legality scoring.
+These folders are generated artifacts and should not be committed unless explicitly requested.
