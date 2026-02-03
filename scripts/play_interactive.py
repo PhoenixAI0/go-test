@@ -36,6 +36,7 @@ def display_board(board: BoardState) -> None:
         board: Board state to display
     """
     size = board.size
+    grid = board.current_board()
 
     # Column labels
     col_labels = "  " + " ".join("ABCDEFGHJKLMNOPQRST"[:size])
@@ -47,10 +48,10 @@ def display_board(board: BoardState) -> None:
         row = row_label + " "
 
         for x in range(size):
-            stone = board.board[y][x]
-            if stone == "B":
+            stone = grid[y][x]
+            if stone == 1:
                 row += "X "
-            elif stone == "W":
+            elif stone == 2:
                 row += "O "
             else:
                 # Show star points for 19x19

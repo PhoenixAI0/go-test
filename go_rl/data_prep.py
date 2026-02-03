@@ -56,12 +56,17 @@ def build_sft_dataset(
     count = 0
     batch: List[dict] = []
 
+    iter_kwargs = {}
+    if num_workers != 0:
+        iter_kwargs["num_workers"] = num_workers
+    if use_parallel is not True:
+        iter_kwargs["use_parallel"] = use_parallel
+
     with output.open("w", encoding="utf-8", buffering=8192 * 16) as handle:
         for sample in iter_sgf_samples(
             sgf_dir,
             max_positions=max_positions,
-            num_workers=num_workers,
-            use_parallel=use_parallel,
+            **iter_kwargs,
         ):
             record = {
                 "prompt": sample["prompt"],

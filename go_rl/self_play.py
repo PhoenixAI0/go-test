@@ -366,11 +366,10 @@ class SelfPlayEngine:
                 try:
                     from .board import gtp_to_coords
 
-                    coords = gtp_to_coords(move, result.board_size)
-                    x, y = coords
-                    # SGF uses letters a-s (skipping i)
-                    sgf_x = chr(ord("a") + x)
-                    sgf_y = chr(ord("a") + y)
+                    row, col = gtp_to_coords(move, result.board_size)
+                    # SGF coordinates use (col, row) with origin at bottom-left.
+                    sgf_x = chr(ord("a") + col)
+                    sgf_y = chr(ord("a") + (result.board_size - 1 - row))
                     move_sgf = f"{sgf_x}{sgf_y}"
                 except Exception:
                     continue  # Skip invalid moves

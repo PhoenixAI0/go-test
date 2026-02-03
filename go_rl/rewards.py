@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .board import gtp_to_coords, BoardState
+from .board import gtp_to_coords, BoardState, _apply_strict_move, _copy_board, _EMPTY, _STONE
 from .config import RewardConfig
+from .rules import BoardHistory, LegalityLevel, validate_legality
 
 
 @dataclass
@@ -40,6 +41,78 @@ def outcome_reward(result: Optional[float], config: RewardConfig) -> float:
     return config.full_game_bonus * result
 
 
+def resolve_legality_level(config: RewardConfig) -> LegalityLevel:
+    if config.legality_level:
+        try:
+            return LegalityLevel(config.legality_level.lower())
+        except ValueError as exc:
+            raise ValueError(
+                f"Unknown legality_level: {config.legality_level}"
+            ) from exc
+    return LegalityLevel.KO if config.strict_legality else LegalityLevel.BASIC
+
+
+def _strict_state_with_history(
+    board: BoardState,
+) -> tuple[list[list[int]], Optional[list[list[int]]], BoardHistory]:
+    current = [[_EMPTY for _ in range(board.size)] for _ in range(board.size)]
+    history = BoardHistory()
+    history.add(current)
+    previous: Optional[list[list[int]]] = None
+    for player, coords in board.moves:
+        previous = _copy_board(current)
+        if coords is None:
+            continue
+        color = _STONE.get(player.upper())
+        if color is None:
+            raise ValueError(f"Unknown player: {player}")
+        current = _apply_strict_move(current, color, coords)
+        history.add(current)
+    return current, previous, history
+
+
+def is_legal_coords(
+    board: BoardState,
+    player: str,
+    coords: Optional[tuple[int, int]],
+    config: RewardConfig,
+) -> bool:
+    if coords is None:
+        return True
+    level = resolve_legality_level(config)
+    if level == LegalityLevel.BASIC:
+        return board.is_basic_legal(coords)
+    if level == LegalityLevel.KO:
+        return board.is_strict_legal(player, coords)
+    if level == LegalityLevel.SUPERKO:
+        try:
+            current, previous, history = _strict_state_with_history(board)
+            color = _STONE.get(player.upper())
+            if color is None:
+                return False
+            next_board = _apply_strict_move(current, color, coords)
+            is_legal, _ = validate_legality(
+                next_board, previous, history, LegalityLevel.SUPERKO
+            )
+            return is_legal
+        except Exception:
+            return False
+    return board.is_basic_legal(coords)
+
+
+def is_legal_move(
+    board: BoardState,
+    player: str,
+    move: str,
+    config: RewardConfig,
+) -> bool:
+    try:
+        coords = gtp_to_coords(move, board.size)
+    except Exception:
+        return False
+    return is_legal_coords(board, player, coords, config)
+
+
 def evaluate_move(
     board: BoardState,
     move: str,
@@ -50,10 +123,7 @@ def evaluate_move(
 ) -> RewardBreakdown:
     try:
         coords = gtp_to_coords(move, board.size)
-        if config.strict_legality:
-            is_legal = board.is_strict_legal(player, coords)
-        else:
-            is_legal = board.is_basic_legal(coords)
+        is_legal = is_legal_coords(board, player, coords, config)
     except Exception:
         is_legal = False
     return RewardBreakdown(

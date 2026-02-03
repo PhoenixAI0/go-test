@@ -12,7 +12,7 @@ from go_rl.config import KataGoConfig, RewardConfig, RolloutConfig, TrainingConf
 from go_rl.katago import KataGoAnalysisClient
 from go_rl.logging_utils import setup_logging
 from go_rl.prompting import parse_prompt
-from go_rl.rewards import evaluate_move
+from go_rl.rewards import evaluate_move, is_legal_coords
 from go_rl.rollout import normalize_move
 from go_rl.run_logging import write_run_log
 from go_rl.training_utils import (
@@ -96,12 +96,7 @@ def build_reward_fn(
                 breakdown = evaluate_move(board, move, 0.0, reward_cfg, player=player)
                 rewards.append(breakdown.total)
                 continue
-            if coords is None:
-                is_legal = True
-            elif reward_cfg.strict_legality:
-                is_legal = board.is_strict_legal(player, coords)
-            else:
-                is_legal = board.is_basic_legal(coords)
+            is_legal = is_legal_coords(board, player, coords, reward_cfg)
             if not is_legal:
                 breakdown = evaluate_move(board, move, 0.0, reward_cfg, player=player)
                 rewards.append(breakdown.total)

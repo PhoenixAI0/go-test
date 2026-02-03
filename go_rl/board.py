@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Set, Tuple
 
 _GTP_COLUMNS = "ABCDEFGHJKLMNOPQRST"
@@ -110,7 +110,7 @@ def _apply_strict_move(
 @dataclass
 class BoardState:
     size: int
-    moves: List[Tuple[str, Optional[Tuple[int, int]]]]
+    moves: List[Tuple[str, Optional[Tuple[int, int]]]] = field(default_factory=list)
 
     @classmethod
     def empty(cls, size: int) -> "BoardState":
@@ -129,6 +129,9 @@ class BoardState:
             except Exception as exc:
                 raise ValueError(f"Illegal move at {index}: {player} {coords}") from exc
         return board
+
+    def current_board(self) -> List[List[int]]:
+        return self._current_board()
 
     def occupied(self) -> set[Tuple[int, int]]:
         board = self._current_board()
@@ -198,18 +201,31 @@ class BoardState:
             return False
         return True
 
-    def apply_move(self, player: str, move: str, strict: bool = False) -> None:
+    def apply_move(
+        self,
+        player: str,
+        move: str | Tuple[int, int] | None,
+        strict: bool = False,
+    ) -> None:
         player = player.strip().upper()
         if player not in _STONE:
             raise ValueError(f"Unknown player: {player}")
-        coords = gtp_to_coords(move, self.size)
+        if move is None:
+            coords = None
+            move_label = "PASS"
+        elif isinstance(move, tuple):
+            coords = move
+            move_label = str(move)
+        else:
+            coords = gtp_to_coords(move, self.size)
+            move_label = move
         if strict:
             is_legal = self.is_strict_legal(player, coords)
         else:
             is_legal = self.is_basic_legal(coords)
         if not is_legal:
             rule_label = "strict" if strict else "basic"
-            raise ValueError(f"Illegal move for {rule_label} rules: {move}")
+            raise ValueError(f"Illegal move for {rule_label} rules: {move_label}")
         self.moves.append((player, coords))
 
     def to_prompt(self) -> str:

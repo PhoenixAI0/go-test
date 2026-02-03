@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import List
+import re
+
+from typing import List, Optional
 
 from .board import BoardState
 
@@ -19,5 +21,25 @@ def parse_prompt(prompt: str) -> BoardState:
     return board
 
 
-def build_prompt(board: BoardState) -> str:
+_MOVE_PATTERN = re.compile(r"\b([A-HJ-T])\s*([1-9]|1[0-9])\b", re.IGNORECASE)
+_PASS_PATTERN = re.compile(r"\bPASS\b", re.IGNORECASE)
+
+
+def build_prompt(board: BoardState, player: Optional[str] = None) -> str:
+    if player is not None:
+        normalized = player.strip().upper()
+        if normalized not in {"B", "W"}:
+            raise ValueError(f"Unknown player: {player}")
     return board.to_prompt()
+
+
+def parse_move(response: str) -> str:
+    """Parse a GTP move or PASS from a model response."""
+    if not response:
+        raise ValueError("Empty response")
+    if _PASS_PATTERN.search(response):
+        return "PASS"
+    match = _MOVE_PATTERN.search(response)
+    if match:
+        return f"{match.group(1).upper()}{match.group(2)}"
+    raise ValueError(f"Could not parse move from response: {response!r}")

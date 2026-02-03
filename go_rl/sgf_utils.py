@@ -41,32 +41,32 @@ def load_sgf(path: str) -> SgfGame:
 
     logger.debug("Loading SGF file %s", path)
     with open(path, "rb") as handle:
-        collection = sgf.Sgf_collection.from_bytes(handle.read())
-    if not collection:
-        raise ValueError("SGF file contains no games")
-    game = collection[0]
+        sgf_bytes = handle.read()
+    if hasattr(sgf, "Sgf_collection"):
+        collection = sgf.Sgf_collection.from_bytes(sgf_bytes)
+        if not collection:
+            raise ValueError("SGF file contains no games")
+        game = collection[0]
+    else:
+        game = sgf.Sgf_game.from_bytes(sgf_bytes)
     root = game.get_root()
-    board_size = int(root.get("SZ", 19))
+    size_prop = root.get("SZ")
+    board_size = int(size_prop) if size_prop else 19
     moves: List[Tuple[str, Tuple[int, int] | None]] = []
     setup_stones: List[Tuple[str, Tuple[int, int]]] = []
 
-    setup_black = root.get("AB") or []
-    setup_white = root.get("AW") or []
-    for coords in setup_black:
-        setup_stones.append(("B", coords))
-    for coords in setup_white:
-        setup_stones.append(("W", coords))
+    if root.has_setup_stones():
+        setup_black, setup_white, _ = root.get_setup_stones()
+        for coords in setup_black:
+            setup_stones.append(("B", coords))
+        for coords in setup_white:
+            setup_stones.append(("W", coords))
 
     for node in game.get_main_sequence()[1:]:
-        if node.has_move("b"):
-            color = "B"
-            coords = node.get_move("b")
-        elif node.has_move("w"):
-            color = "W"
-            coords = node.get_move("w")
-        else:
+        color, coords = node.get_move()
+        if color is None:
             continue
-        moves.append((color, coords))
+        moves.append((color.upper(), coords))
     logger.debug("Parsed SGF file %s with %d moves", path, len(moves))
     return SgfGame(
         board_size=board_size,
@@ -86,7 +86,10 @@ def sample_positions(game: SgfGame, max_positions: int) -> List[dict]:
     )
     for player, coords in game.setup_stones:
         gtp_move = coords_to_gtp(coords, game.board_size)
-        board.apply_move(player, gtp_move)
+        try:
+            board.apply_move(player, gtp_move)
+        except ValueError as exc:
+            logger.warning("Skipping invalid setup stone %s: %s", gtp_move, exc)
     for player, coords in game.moves:
         if coords is None:
             gtp_move = "PASS"
@@ -100,7 +103,11 @@ def sample_positions(game: SgfGame, max_positions: int) -> List[dict]:
                 "board_size": game.board_size,
             }
         )
-        board.apply_move(player, gtp_move)
+        try:
+            board.apply_move(player, gtp_move)
+        except ValueError as exc:
+            logger.warning("Stopping game after illegal move %s: %s", gtp_move, exc)
+            break
         if len(samples) >= max_positions:
             break
     logger.debug("Collected %d samples from game", len(samples))
@@ -156,7 +163,7 @@ def iter_sgf_samples(
         num_workers = _get_num_workers()
 
     # Use parallel processing for multiple files
-    if use_parallel and num_workers > 1 and total_files > 1:
+    if use_parallel and num_workers > 1 and total_files >= num_workers:
         logger.info("Using parallel processing with %d workers", num_workers)
         yield from _iter_sgf_samples_parallel(sgf_files, max_positions, num_workers)
     else:
