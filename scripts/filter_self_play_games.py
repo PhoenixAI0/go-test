@@ -19,6 +19,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 from pathlib import Path
 from typing import List, Tuple
+from venv_utils import ensure_virtualenv
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -146,6 +147,7 @@ def _validate_and_filter_file(
 
 
 def main() -> int:
+    ensure_virtualenv()
     parser = argparse.ArgumentParser(
         description="Filter self-play games by quality",
         formatter_class=argparse.RawDescriptionHelpFormatter,

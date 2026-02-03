@@ -1,8 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
 echo "=========================================="
-echo "Go RL: Supervised Fine-Tuning (SFT)"
+echo "Go RL: GRPO Training"
 echo "=========================================="
 
 # Colors for output
@@ -54,7 +58,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --smoke              Run smoke test (1 epoch, minimal data)"
+            echo "  --smoke              Run smoke test (minimal steps for verification)"
             echo "  --wandb              Enable Weights & Biases logging"
             echo "  --wandb-project NAME Set W&B project name (default: go-rl)"
             echo "  --board-size SIZE    Board size: 9x9 or 19x19 (default: 9x9)"
@@ -84,12 +88,33 @@ if [ -f .env ]; then
     source .env
 fi
 
+# Verify KataGo is available
+if [ -z "${KATAGO_BIN:-}" ]; then
+    echo -e "${RED}Error: KATAGO_BIN environment variable not set${NC}"
+    echo "Please source .env or run ./scripts/setup_environment.sh"
+    exit 1
+fi
+
+if [ ! -f "$KATAGO_BIN" ]; then
+    echo -e "${RED}Error: KataGo binary not found: $KATAGO_BIN${NC}"
+    echo "Please run ./scripts/setup_environment.sh to install KataGo"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ KataGo binary found: $KATAGO_BIN${NC}"
+
+# Test KataGo
+if ! $KATAGO_BIN version &> /dev/null; then
+    echo -e "${RED}Error: KataGo test failed${NC}"
+    exit 1
+fi
+
 # Check if dataset exists
-DATASET_FILE="data/sft_${BOARD_SIZE}.jsonl"
+DATASET_FILE="data/rl_prompts_${BOARD_SIZE}.jsonl"
 if [ ! -f "$DATASET_FILE" ]; then
     echo -e "${RED}Error: Dataset not found: $DATASET_FILE${NC}"
     echo ""
-    echo "Please run ./prepare_data.sh first to create the dataset."
+    echo "Please run ./scripts/prepare_data.sh first to create the dataset."
     exit 1
 fi
 
@@ -99,24 +124,23 @@ echo -e "${GREEN}Found dataset: $DATASET_FILE ($SAMPLE_COUNT samples)${NC}"
 
 # Determine config file
 if [ "$BOARD_SIZE" = "9x9" ]; then
-    CONFIG_FILE="config/sft_warm_start.yaml"
+    CONFIG_FILE="config/grpo_9x9.yaml"
 elif [ "$BOARD_SIZE" = "19x19" ]; then
-    CONFIG_FILE="config/sft_warm_start_19x19.yaml"
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo -e "${RED}Error: 19x19 config not found: $CONFIG_FILE${NC}"
-        echo "This config should exist in the repository."
-        exit 1
-    fi
+    CONFIG_FILE="config/grpo_19x19.yaml"
 else
     echo -e "${RED}Error: Invalid board size: $BOARD_SIZE${NC}"
-    echo "Supported sizes: 9x9, 19x19"
+    exit 1
+fi
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo -e "${RED}Error: Config file not found: $CONFIG_FILE${NC}"
     exit 1
 fi
 
 # Build command
 if [ -z "$MULTI_GPU" ]; then
     # Single GPU mode (backward compatible)
-    CMD="python scripts/run_sft.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
+    CMD="python scripts/run_grpo.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
 else
     if [ "$MULTI_GPU" = "auto" ]; then
         if command -v nvidia-smi &>/dev/null; then
@@ -154,7 +178,7 @@ else
         echo -e "${RED}Error: Accelerate config not found: $ACCELERATE_CONFIG${NC}"
         exit 1
     fi
-    CMD="accelerate launch --config_file=$ACCELERATE_CONFIG scripts/run_sft.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
+    CMD="accelerate launch --config_file=$ACCELERATE_CONFIG scripts/run_grpo.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
     echo -e "${GREEN}Multi-GPU training enabled: ${MULTI_GPU} GPU(s)${NC}"
 fi
 
@@ -181,8 +205,9 @@ echo "  - Dataset: $DATASET_FILE"
 echo "  - Samples: $SAMPLE_COUNT"
 echo "  - Smoke test: $SMOKE_TEST"
 echo "  - W&B enabled: $USE_WANDB"
+echo "  - KataGo: $KATAGO_BIN"
 echo ""
-echo -e "${YELLOW}Starting SFT training...${NC}"
+echo -e "${YELLOW}Starting GRPO training...${NC}"
 echo "Command: $CMD"
 echo ""
 
@@ -193,22 +218,20 @@ $CMD
 if [ $? -eq 0 ]; then
     echo ""
     echo -e "${GREEN}=========================================="
-    echo "SFT Training Complete!"
+    echo "GRPO Training Complete!"
     echo "==========================================${NC}"
     echo ""
-    if [ "$BOARD_SIZE" = "19x19" ]; then
-        echo "Model saved to: outputs/sft_warm_start_19x19/"
-        echo "Logs saved to: logs/sft_warm_start_19x19/"
-    else
-        echo "Model saved to: outputs/sft_warm_start/"
-        echo "Logs saved to: logs/sft_warm_start/"
-    fi
+    echo "Model saved to: outputs/grpo_${BOARD_SIZE}/"
+    echo "Logs saved to: logs/grpo_${BOARD_SIZE}/"
     echo ""
     if [ "$SMOKE_TEST" = false ]; then
         echo "Next steps:"
-        echo "1. Evaluate the trained model"
-        echo "2. Run GRPO training: ./train_grpo.sh"
+        echo "1. Evaluate the trained model with KataGo matches"
+        echo "2. Run: python scripts/eval_elo.py --katago-bin \$KATAGO_BIN ..."
         echo ""
+        if [ "$BOARD_SIZE" = "9x9" ]; then
+            echo "Consider promoting to 19x19 if Elo threshold is met!"
+        fi
     else
         echo "This was a smoke test. To do full training, run without --smoke flag."
         echo ""

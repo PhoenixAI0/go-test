@@ -24,6 +24,7 @@ from go_rl.sgf_sources import (
     print_manual_instructions,
     validate_sgf_directory,
 )
+from venv_utils import ensure_virtualenv
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -35,6 +36,7 @@ def setup_logging(level: str = "INFO") -> None:
 
 
 def main() -> int:
+    ensure_virtualenv()
     parser = argparse.ArgumentParser(
         description="Download SGF files for Go RL training",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -171,7 +173,7 @@ Note: Most sources require manual download or API keys. This script provides
             return 1
 
         print(f"\n✓ Found {valid} valid SGF files")
-        print("\nNext step: Run ./prepare_data.sh to create training data")
+        print("\nNext step: Run ./scripts/prepare_data.sh to create training data")
         return 0
 
     # Handle download
@@ -221,7 +223,7 @@ Note: Most sources require manual download or API keys. This script provides
 
             if valid > 0:
                 print(f"\n✓ Downloaded and validated {valid} SGF files")
-                print("\nNext step: Run ./prepare_data.sh to create training data")
+                print("\nNext step: Run ./scripts/prepare_data.sh to create training data")
                 return 0
             else:
                 logger.error("No valid SGF files after download")

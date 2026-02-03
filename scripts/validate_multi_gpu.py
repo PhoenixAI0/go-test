@@ -12,6 +12,7 @@ import os
 import sys
 from pathlib import Path
 from typing import List, Tuple
+from venv_utils import ensure_virtualenv, uv_pip_install
 
 
 def check_gpu_availability() -> Tuple[bool, str, int]:
@@ -97,7 +98,7 @@ def check_accelerate_configs() -> Tuple[bool, str, List[str]]:
     return True, f"All {len(found)} accelerate configs found", found
 
 
-def check_accelerate_installation() -> Tuple[bool, str]:
+def check_accelerate_installation(auto_install: bool = True) -> Tuple[bool, str]:
     """Check if accelerate is installed.
 
     Returns:
@@ -109,7 +110,19 @@ def check_accelerate_installation() -> Tuple[bool, str]:
         version = accelerate.__version__
         return True, f"Accelerate installed (version {version})"
     except ImportError:
-        return False, "Accelerate is not installed (pip install accelerate)"
+        if not auto_install:
+            return False, "Accelerate is not installed (uv pip install accelerate)"
+        try:
+            uv_pip_install(["accelerate"])
+        except Exception as exc:
+            return False, f"Accelerate install failed: {exc}"
+        try:
+            import accelerate
+
+            version = accelerate.__version__
+            return True, f"Accelerate installed (version {version})"
+        except Exception as exc:
+            return False, f"Accelerate import failed after install: {exc}"
 
 
 def validate_accelerate_config(config_path: str, expected_gpus: int) -> Tuple[bool, str]:
@@ -163,8 +176,8 @@ def check_training_scripts() -> Tuple[bool, str]:
         Tuple of (success, message)
     """
     scripts = [
-        "train_sft.sh",
-        "train_grpo.sh",
+        "scripts/train_sft.sh",
+        "scripts/train_grpo.sh",
         "scripts/run_sft.py",
         "scripts/run_grpo.py",
     ]
@@ -178,7 +191,7 @@ def check_training_scripts() -> Tuple[bool, str]:
         return False, f"Missing training scripts: {', '.join(missing)}"
 
     # Check if shell scripts support --multi-gpu flag
-    for shell_script in ["train_sft.sh", "train_grpo.sh"]:
+    for shell_script in ["scripts/train_sft.sh", "scripts/train_grpo.sh"]:
         with open(shell_script, "r") as f:
             content = f.read()
             if "--multi-gpu" not in content:
@@ -224,6 +237,7 @@ def print_section(title: str) -> None:
 
 
 def main() -> int:
+    ensure_virtualenv()
     parser = argparse.ArgumentParser(
         description="Validate multi-GPU training setup",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -328,14 +342,14 @@ def main() -> int:
     if all_passed:
         print("✓ ALL CHECKS PASSED - Multi-GPU training is ready!")
         print("\nTo train with multiple GPUs:")
-        print("  ./train_sft.sh --multi-gpu 2    # 2 GPUs")
-        print("  ./train_sft.sh --multi-gpu 4    # 4 GPUs")
-        print("  ./train_grpo.sh --multi-gpu 4   # 4 GPUs")
+        print("  ./scripts/train_sft.sh --multi-gpu 2    # 2 GPUs")
+        print("  ./scripts/train_sft.sh --multi-gpu 4    # 4 GPUs")
+        print("  ./scripts/train_grpo.sh --multi-gpu 4   # 4 GPUs")
     else:
         print("❌ SOME CHECKS FAILED - Please fix issues above")
         print("\nCommon solutions:")
         print("  - Install CUDA drivers and PyTorch with CUDA support")
-        print("  - Install accelerate: pip install accelerate")
+        print("  - Install accelerate: uv pip install accelerate")
         print("  - Ensure config files exist in config/accelerate/")
 
     print("=" * 70 + "\n")

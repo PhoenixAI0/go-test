@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
 echo "=========================================="
 echo "Go RL Dataset Preparation"
 echo "=========================================="
@@ -96,6 +100,6 @@ echo "==========================================${NC}"
 echo ""
 echo "Next steps:"
 echo "1. Review the generated datasets in data/"
-echo "2. Run: ./train_sft.sh (for supervised fine-tuning warm start)"
-echo "3. Run: ./train_grpo.sh (for RL training)"
+echo "2. Run: ./scripts/train_sft.sh (for supervised fine-tuning warm start)"
+echo "3. Run: ./scripts/train_grpo.sh (for RL training)"
 echo ""

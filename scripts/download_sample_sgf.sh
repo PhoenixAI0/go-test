@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
 echo "=========================================="
 echo "Download Sample SGF Files"
 echo "=========================================="
@@ -51,6 +55,18 @@ if ! command -v python &>/dev/null && ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
+# Ensure virtual environment is activated
+if [ -z "${VIRTUAL_ENV:-}" ]; then
+    if [ -f .venv/bin/activate ]; then
+        echo -e "${YELLOW}Activating virtual environment...${NC}"
+        source .venv/bin/activate
+    else
+        echo -e "${RED}Error: Virtual environment not found (.venv)${NC}"
+        echo "Run: ./scripts/setup_environment.sh"
+        exit 1
+    fi
+fi
+
 # Use python3 if available, fallback to python
 PYTHON_CMD="python3"
 if ! command -v python3 &>/dev/null; then
@@ -74,9 +90,9 @@ COUNT=$(find "$TARGET_DIR" -name "*.sgf" 2>/dev/null | wc -l)
 if [ "$COUNT" -gt 0 ]; then
     echo -e "${GREEN}Found $COUNT SGF files in $TARGET_DIR${NC}"
     echo ""
-    echo "Next step: Run ./prepare_data.sh to convert these to training data"
+    echo "Next step: Run ./scripts/prepare_data.sh to convert these to training data"
 else
     echo -e "${YELLOW}No SGF files found yet in $TARGET_DIR${NC}"
     echo ""
-    echo "After downloading SGF files, run ./prepare_data.sh"
+    echo "After downloading SGF files, run ./scripts/prepare_data.sh"
 fi

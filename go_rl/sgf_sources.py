@@ -273,4 +273,4 @@ def print_manual_instructions(board_size: int, output_dir: Path) -> None:
     print("After downloading SGF files:")
     print(f"  1. Copy them to {output_dir}/")
     print("  2. Validate: python scripts/download_sgf.py --validate-only")
-    print("  3. Prepare data: ./prepare_data.sh\n")
+    print("  3. Prepare data: ./scripts/prepare_data.sh\n")

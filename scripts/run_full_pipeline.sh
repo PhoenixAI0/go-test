@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
 echo "=========================================="
 echo "Go RL: Full Training Pipeline"
 echo "=========================================="
@@ -96,7 +100,7 @@ if [ "$SKIP_SETUP" = false ]; then
     echo "STEP 1/4: Environment Setup"
     echo "==========================================${NC}"
     echo ""
-    ./setup_environment.sh
+    ./scripts/setup_environment.sh
     if [ $? -ne 0 ]; then
         echo -e "${RED}Setup failed!${NC}"
         exit 1
@@ -120,7 +124,7 @@ if [ "$SKIP_DATA" = false ]; then
     echo "STEP 2/4: Data Preparation"
     echo "==========================================${NC}"
     echo ""
-    ./prepare_data.sh
+    ./scripts/prepare_data.sh
     if [ $? -ne 0 ]; then
         echo -e "${RED}Data preparation failed!${NC}"
         exit 1
@@ -137,7 +141,7 @@ if [ "$SKIP_SFT" = false ]; then
     echo "==========================================${NC}"
     echo ""
     
-    SFT_CMD="./train_sft.sh --board-size $BOARD_SIZE"
+    SFT_CMD="./scripts/train_sft.sh --board-size $BOARD_SIZE"
     if [ "$SMOKE_TEST" = true ]; then
         SFT_CMD="$SFT_CMD --smoke"
     fi
@@ -161,7 +165,7 @@ echo "STEP 4/4: GRPO Training (Reinforcement Learning)"
 echo "==========================================${NC}"
 echo ""
 
-GRPO_CMD="./train_grpo.sh --board-size $BOARD_SIZE"
+GRPO_CMD="./scripts/train_grpo.sh --board-size $BOARD_SIZE"
 if [ "$SMOKE_TEST" = true ]; then
     GRPO_CMD="$GRPO_CMD --smoke"
 fi

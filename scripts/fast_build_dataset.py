@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from go_rl.data_prep import build_sft_dataset
 from go_rl.logging_utils import setup_logging
+from venv_utils import ensure_virtualenv
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,7 @@ def estimate_dataset_size(sgf_dir: str) -> int:
 
 
 def main() -> None:
+    ensure_virtualenv()
     parser = argparse.ArgumentParser(
         description="Fast dataset builder with automatic optimization",
         formatter_class=argparse.RawDescriptionHelpFormatter,

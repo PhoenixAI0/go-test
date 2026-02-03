@@ -16,6 +16,7 @@ from go_rl.training_utils import (
     quantization_kwargs,
 )
 from go_rl.wandb_utils import configure_wandb, finish_wandb, log_system_metrics
+from venv_utils import ensure_virtualenv
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ def format_example(example: Dict[str, str]) -> str:
 
 
 def main() -> None:
+    ensure_virtualenv()
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--smoke", action="store_true")

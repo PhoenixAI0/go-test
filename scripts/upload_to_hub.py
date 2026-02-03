@@ -12,6 +12,8 @@ import logging
 import sys
 from pathlib import Path
 
+from venv_utils import ensure_virtualenv, uv_pip_install
+
 
 def setup_logging(level: str = "INFO") -> None:
     """Setup logging configuration."""
@@ -22,6 +24,7 @@ def setup_logging(level: str = "INFO") -> None:
 
 
 def main() -> int:
+    ensure_virtualenv()
     parser = argparse.ArgumentParser(
         description="Upload trained model to HuggingFace Hub",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -41,7 +44,7 @@ Examples:
       --private
 
 Prerequisites:
-  1. Install huggingface_hub: pip install huggingface_hub
+  1. Install huggingface_hub: uv pip install huggingface_hub
   2. Login: huggingface-cli login
   3. Verify: huggingface-cli whoami
         """,
@@ -118,9 +121,15 @@ Prerequisites:
         from huggingface_hub import HfApi, create_repo
         from transformers import AutoModelForCausalLM, AutoTokenizer
     except ImportError as e:
-        logger.error(f"Missing required library: {e}")
-        logger.error("Install with: pip install huggingface_hub transformers")
-        return 1
+        logger.warning(f"Missing required library: {e}")
+        logger.info("Installing with uv...")
+        try:
+            uv_pip_install(["huggingface_hub", "transformers"])
+        except Exception as install_error:
+            logger.error(f"Dependency install failed: {install_error}")
+            return 1
+        from huggingface_hub import HfApi, create_repo
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
     # Create repository
     logger.info(f"Creating repository: {args.repo_id}")

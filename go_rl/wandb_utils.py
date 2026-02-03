@@ -47,7 +47,7 @@ def configure_wandb(
         import wandb
     except ImportError:
         logger.warning("wandb not installed; disabling W&B reporting.")
-        logger.info("Install with: pip install wandb")
+        logger.info("Install with: uv pip install wandb")
         return False
 
     # Set environment variables for wandb configuration

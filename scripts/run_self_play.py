@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from go_rl.config import load_config
 from go_rl.self_play import SelfPlayConfig, SelfPlayEngine, compute_game_statistics
+from venv_utils import ensure_virtualenv
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -28,6 +29,7 @@ def setup_logging(level: str = "INFO") -> None:
 
 
 def main() -> int:
+    ensure_virtualenv()
     parser = argparse.ArgumentParser(
         description="Generate self-play training data",
         formatter_class=argparse.RawDescriptionHelpFormatter,

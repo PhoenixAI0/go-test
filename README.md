@@ -13,23 +13,23 @@ The quick start guide provides step-by-step instructions for setting up and trai
 
 ```bash
 # 1. Setup environment (installs everything)
-./setup_environment.sh
+./scripts/setup_environment.sh
 
 # 2. Add SGF files to data/sgf_9x9/ or data/sgf_19x19/
-# See download_sample_sgf.sh --help for sources
+# See scripts/download_sample_sgf.sh --help for sources
 
 # 3. Prepare datasets
-./prepare_data.sh
+./scripts/prepare_data.sh
 
 # 4. Train (SFT + GRPO in sequence)
-./run_full_pipeline.sh --smoke  # smoke test first
-./run_full_pipeline.sh          # full training
+./scripts/run_full_pipeline.sh --smoke  # smoke test first
+./scripts/run_full_pipeline.sh          # full training
 ```
 
 Or train individually:
 ```bash
-./train_sft.sh --smoke    # SFT warm start
-./train_grpo.sh --smoke   # RL training
+./scripts/train_sft.sh --smoke    # SFT warm start
+./scripts/train_grpo.sh --smoke   # RL training
 ```
 
 ## Shell Script Usage
@@ -38,35 +38,35 @@ These scripts live at repo root. If a script supports flags, it also supports `-
 
 Setup and validation:
 ```bash
-./setup_environment.sh       # installs deps + KataGo, writes .env
-./verify_setup.sh            # checks venv, CUDA, KataGo, data
+./scripts/setup_environment.sh       # installs deps + KataGo, writes .env
+./scripts/verify_setup.sh            # checks venv, CUDA, KataGo, data
 ```
 
 SGF ingestion and dataset prep:
 ```bash
-./download_sample_sgf.sh --board-size 9x9   # manual download guidance
-./download_sample_sgf.sh --board-size 19x19
-./prepare_data.sh                          # builds data/sft_*.jsonl + data/rl_prompts_*.jsonl
+./scripts/download_sample_sgf.sh --board-size 9x9   # manual download guidance
+./scripts/download_sample_sgf.sh --board-size 19x19
+./scripts/prepare_data.sh                          # builds data/sft_*.jsonl + data/rl_prompts_*.jsonl
 ```
 
 Training helpers:
 ```bash
-./train_sft.sh --smoke --board-size 9x9 --wandb --wandb-project go-rl
-./train_grpo.sh --smoke --board-size 9x9 --wandb --wandb-project go-rl
+./scripts/train_sft.sh --smoke --board-size 9x9 --wandb --wandb-project go-rl
+./scripts/train_grpo.sh --smoke --board-size 9x9 --wandb --wandb-project go-rl
 ```
 
 Multi-GPU examples:
 ```bash
-./train_sft.sh --multi-gpu 4 --gradient-checkpointing
-./train_grpo.sh --multi-gpu 4
-./train_sft.sh --multi-gpu auto
+./scripts/train_sft.sh --multi-gpu 4 --gradient-checkpointing
+./scripts/train_grpo.sh --multi-gpu 4
+./scripts/train_sft.sh --multi-gpu auto
 ```
 
 Full pipeline:
 ```bash
-./run_full_pipeline.sh --smoke
-./run_full_pipeline.sh --board-size 19x19 --wandb
-./run_full_pipeline.sh --skip-setup --skip-data
+./scripts/run_full_pipeline.sh --smoke
+./scripts/run_full_pipeline.sh --board-size 19x19 --wandb
+./scripts/run_full_pipeline.sh --skip-setup --skip-data
 ```
 
 ## Manual Setup
@@ -84,15 +84,11 @@ If you prefer manual setup:
 ### Installation
 
 ```bash
-# Using uv (recommended)
+# Using uv
 uv venv .venv
 source .venv/bin/activate
 uv pip install -r requirements.txt
 uv pip install -e .
-
-# Or using pip
-pip install -r requirements.txt
-pip install -e .
 ```
 
 ## Data Expectations
@@ -143,15 +139,15 @@ nvidia-smi
 python scripts/check_gpu_setup.py
 
 # SFT Training with multiple GPUs
-./train_sft.sh --multi-gpu 2    # 2 GPUs
-./train_sft.sh --multi-gpu 4    # 4 GPUs
-./train_sft.sh --multi-gpu 8    # 8 GPUs
+./scripts/train_sft.sh --multi-gpu 2    # 2 GPUs
+./scripts/train_sft.sh --multi-gpu 4    # 4 GPUs
+./scripts/train_sft.sh --multi-gpu 8    # 8 GPUs
 
 # GRPO Training with multiple GPUs
-./train_grpo.sh --multi-gpu 4
+./scripts/train_grpo.sh --multi-gpu 4
 
 # With gradient checkpointing for memory efficiency
-./train_sft.sh --multi-gpu 4 --gradient-checkpointing
+./scripts/train_sft.sh --multi-gpu 4 --gradient-checkpointing
 ```
 
 **Performance:** Near-linear speedup (2 GPUs ≈ 2x faster, 4 GPUs ≈ 4x faster)

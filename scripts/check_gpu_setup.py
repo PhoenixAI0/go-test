@@ -4,14 +4,16 @@
 from __future__ import annotations
 
 import sys
+from venv_utils import ensure_virtualenv
 
 
 def main() -> None:
+    ensure_virtualenv()
     try:
         import torch
     except ImportError:
         print("❌ PyTorch not installed")
-        print("Please install PyTorch: pip install torch")
+        print("Please install PyTorch: uv pip install torch")
         sys.exit(1)
 
     # Check CUDA availability
@@ -60,43 +62,43 @@ def main() -> None:
 
     if num_gpus == 1:
         print("Single GPU Configuration:")
-        print("  ./train_sft.sh")
-        print("  ./train_grpo.sh")
+        print("  ./scripts/train_sft.sh")
+        print("  ./scripts/train_grpo.sh")
         print()
         print("This is the default mode (no flags needed).")
 
     elif num_gpus == 2:
         print("Multi-GPU Configuration (2 GPUs):")
-        print("  ./train_sft.sh --multi-gpu 2")
-        print("  ./train_grpo.sh --multi-gpu 2")
+        print("  ./scripts/train_sft.sh --multi-gpu 2")
+        print("  ./scripts/train_grpo.sh --multi-gpu 2")
         print()
         print("Expected speedup: ~1.8-1.9x faster than single GPU")
         print()
         if total_vram < 48:
             print("⚠️  Limited VRAM: Consider using --gradient-checkpointing")
-            print("  ./train_sft.sh --multi-gpu 2 --gradient-checkpointing")
+            print("  ./scripts/train_sft.sh --multi-gpu 2 --gradient-checkpointing")
 
     elif num_gpus >= 4 and num_gpus < 8:
         print("Multi-GPU Configuration (4 GPUs):")
-        print("  ./train_sft.sh --multi-gpu 4")
-        print("  ./train_grpo.sh --multi-gpu 4")
+        print("  ./scripts/train_sft.sh --multi-gpu 4")
+        print("  ./scripts/train_grpo.sh --multi-gpu 4")
         print()
         print("Expected speedup: ~3.5-3.8x faster than single GPU")
         print()
         if total_vram < 96:
             print("⚠️  Limited VRAM: Consider using --gradient-checkpointing")
-            print("  ./train_sft.sh --multi-gpu 4 --gradient-checkpointing")
+            print("  ./scripts/train_sft.sh --multi-gpu 4 --gradient-checkpointing")
 
     elif num_gpus >= 8:
         print("Multi-GPU Configuration (8 GPUs):")
-        print("  ./train_sft.sh --multi-gpu 8")
-        print("  ./train_grpo.sh --multi-gpu 8")
+        print("  ./scripts/train_sft.sh --multi-gpu 8")
+        print("  ./scripts/train_grpo.sh --multi-gpu 8")
         print()
         print("Expected speedup: ~6.5-7.5x faster than single GPU")
         print()
         if total_vram < 192:
             print("⚠️  Limited VRAM: Consider using --gradient-checkpointing")
-            print("  ./train_sft.sh --multi-gpu 8 --gradient-checkpointing")
+            print("  ./scripts/train_sft.sh --multi-gpu 8 --gradient-checkpointing")
 
     print()
 
@@ -131,8 +133,8 @@ def main() -> None:
     print("=" * 60)
     print()
     print("1. Test first with --smoke flag:")
-    print("   ./train_sft.sh --multi-gpu 4 --smoke")
-    print("   # Or auto-detect: ./train_sft.sh --multi-gpu auto --smoke")
+    print("   ./scripts/train_sft.sh --multi-gpu 4 --smoke")
+    print("   # Or auto-detect: ./scripts/train_sft.sh --multi-gpu auto --smoke")
     print()
     print("2. Monitor GPU usage during training:")
     print("   watch -n 1 nvidia-smi")

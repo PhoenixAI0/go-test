@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
 echo "=========================================="
 echo "Go RL Training Environment Setup"
 echo "=========================================="
@@ -140,9 +144,9 @@ echo "==========================================${NC}"
 echo ""
 echo "Next steps:"
 echo "1. Add SGF files to data/sgf_9x9/ or data/sgf_19x19/"
-echo "2. Run: ./prepare_data.sh"
-echo "3. Run: ./train_sft.sh (for supervised fine-tuning)"
-echo "4. Run: ./train_grpo.sh (for RL training)"
+echo "2. Run: ./scripts/prepare_data.sh"
+echo "3. Run: ./scripts/train_sft.sh (for supervised fine-tuning)"
+echo "4. Run: ./scripts/train_grpo.sh (for RL training)"
 echo ""
 echo "To activate the environment in the future:"
 echo "  source .venv/bin/activate"

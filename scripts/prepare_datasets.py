@@ -8,6 +8,7 @@ from typing import List
 
 from go_rl.sgf_utils import iter_sgf_samples
 from go_rl.logging_utils import setup_logging
+from venv_utils import ensure_virtualenv
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ def _write_jsonl_batch(handle, records: List[dict]) -> None:
 
 
 def main() -> None:
+    ensure_virtualenv()
     parser = argparse.ArgumentParser()
     parser.add_argument("--sgf-dir", required=True, help="Directory containing SGF files")
     parser.add_argument("--output-dir", default="data", help="Output directory for datasets")

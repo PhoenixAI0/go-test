@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from go_rl.board import BoardState, coords_to_gtp
 from go_rl.prompting import build_prompt, parse_move
+from venv_utils import ensure_virtualenv
 
 
 def setup_logging(level: str = "WARNING") -> None:
@@ -155,6 +156,7 @@ def generate_model_move(model, tokenizer, board: BoardState, player: str, temper
 
 
 def main() -> int:
+    ensure_virtualenv()
     parser = argparse.ArgumentParser(
         description="Play Go interactively against a trained model",
         formatter_class=argparse.RawDescriptionHelpFormatter,

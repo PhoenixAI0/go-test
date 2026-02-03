@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
 echo "=========================================="
 echo "Go RL Setup Verification"
 echo "=========================================="
@@ -24,7 +28,7 @@ if [ -d ".venv" ]; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗ Not found${NC}"
-    echo "   Run: ./setup_environment.sh"
+    echo "   Run: ./scripts/setup_environment.sh"
     ERRORS=$((ERRORS + 1))
 fi
 
@@ -69,7 +73,7 @@ if [ -n "${KATAGO_BIN:-}" ] && [ -f "$KATAGO_BIN" ]; then
     fi
 else
     echo -e "${RED}✗ Not found${NC}"
-    echo "   Run: ./setup_environment.sh"
+    echo "   Run: ./scripts/setup_environment.sh"
     ERRORS=$((ERRORS + 1))
 fi
 
@@ -80,7 +84,7 @@ if [ -n "${KATAGO_MODEL:-}" ] && [ -f "$KATAGO_MODEL" ]; then
     echo -e "${GREEN}✓ (${SIZE})${NC}"
 else
     echo -e "${RED}✗ Not found${NC}"
-    echo "   Run: ./setup_environment.sh"
+    echo "   Run: ./scripts/setup_environment.sh"
     ERRORS=$((ERRORS + 1))
 fi
 
@@ -90,7 +94,7 @@ if [ -n "${KATAGO_CONFIG:-}" ] && [ -f "$KATAGO_CONFIG" ]; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗ Not found${NC}"
-    echo "   Run: ./setup_environment.sh"
+    echo "   Run: ./scripts/setup_environment.sh"
     ERRORS=$((ERRORS + 1))
 fi
 
@@ -101,7 +105,7 @@ if [ "$SGF_9x9_COUNT" -gt 0 ]; then
     echo -e "${GREEN}✓ ($SGF_9x9_COUNT files)${NC}"
 else
     echo -e "${YELLOW}⚠ No files found${NC}"
-    echo "   Add SGF files to data/sgf_9x9/ or run: ./download_sample_sgf.sh"
+    echo "   Add SGF files to data/sgf_9x9/ or run: ./scripts/download_sample_sgf.sh"
     WARNINGS=$((WARNINGS + 1))
 fi
 
@@ -127,7 +131,7 @@ if [ $DATASETS -gt 0 ]; then
     echo -e "${GREEN}✓ ($DATASETS found)${NC}"
 elif [ $SGF_9x9_COUNT -gt 0 ] || [ $SGF_19x19_COUNT -gt 0 ]; then
     echo -e "${YELLOW}⚠ Not prepared yet${NC}"
-    echo "   Run: ./prepare_data.sh"
+    echo "   Run: ./scripts/prepare_data.sh"
     WARNINGS=$((WARNINGS + 1))
 else
     echo -e "${YELLOW}⚠ No datasets or SGF files${NC}"
@@ -149,7 +153,7 @@ fi
 # Check 11: Executable scripts
 echo -n "11. Shell scripts: "
 EXEC_COUNT=0
-for script in setup_environment.sh prepare_data.sh train_sft.sh train_grpo.sh run_full_pipeline.sh; do
+for script in scripts/setup_environment.sh scripts/prepare_data.sh scripts/train_sft.sh scripts/train_grpo.sh scripts/run_full_pipeline.sh; do
     [ -x "$script" ] && EXEC_COUNT=$((EXEC_COUNT + 1))
 done
 
@@ -157,7 +161,7 @@ if [ $EXEC_COUNT -eq 5 ]; then
     echo -e "${GREEN}✓ All executable${NC}"
 else
     echo -e "${YELLOW}⚠ Some not executable${NC}"
-    echo "   Run: chmod +x *.sh"
+    echo "   Run: chmod +x scripts/*.sh"
     WARNINGS=$((WARNINGS + 1))
 fi
 
@@ -177,20 +181,20 @@ if [ $ERRORS -eq 0 ] && [ $WARNINGS -eq 0 ]; then
     echo -e "${GREEN}✓ Setup is complete!${NC}"
     echo ""
     echo "You can now run training:"
-    echo "  ./train_sft.sh --smoke    # Test SFT"
-    echo "  ./train_grpo.sh --smoke   # Test GRPO"
-    echo "  ./run_full_pipeline.sh    # Full pipeline"
+    echo "  ./scripts/train_sft.sh --smoke    # Test SFT"
+    echo "  ./scripts/train_grpo.sh --smoke   # Test GRPO"
+    echo "  ./scripts/run_full_pipeline.sh    # Full pipeline"
 elif [ $ERRORS -eq 0 ]; then
     echo -e "${YELLOW}⚠ Setup mostly complete with $WARNINGS warning(s)${NC}"
     echo ""
     echo "You can proceed with training, but consider:"
     echo "  - Adding more SGF files for better training"
-    echo "  - Running ./prepare_data.sh to create datasets"
+    echo "  - Running ./scripts/prepare_data.sh to create datasets"
 else
     echo -e "${RED}✗ Setup incomplete: $ERRORS error(s), $WARNINGS warning(s)${NC}"
     echo ""
     echo "Please fix the errors above before training."
-    echo "Start with: ./setup_environment.sh"
+    echo "Start with: ./scripts/setup_environment.sh"
     exit 1
 fi
 

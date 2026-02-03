@@ -11,6 +11,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from venv_utils import ensure_virtualenv
 
 
 def create_match_config(
@@ -126,6 +127,7 @@ player2 = {{
 
 
 def main() -> None:
+    ensure_virtualenv()
     parser = argparse.ArgumentParser(
         description="Generate KataGo match configuration for Elo evaluation"
     )

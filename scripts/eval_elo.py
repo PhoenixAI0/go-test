@@ -28,9 +28,11 @@ import argparse
 import os
 import subprocess
 import sys
+from venv_utils import ensure_virtualenv
 
 
 def main() -> None:
+    ensure_virtualenv()
     parser = argparse.ArgumentParser(
         description="Run KataGo match for Elo evaluation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
