@@ -2,13 +2,13 @@
 
 This repo provides Go RL data prep, prompting utilities, and training entry points
 for SFT and GRPO using KataGo-based rewards. It also includes optional Go tooling
-for fast SGF parsing, self-play generation, and evaluation helpers.
+for fast SGF parsing and evaluation helpers.
 
 **Repo layout**
 - `go_rl/` core Python library.
 - `go_parser/` optional Go SGF parser (builds a `sgf_parser` binary).
-- `scripts/` setup, data prep, training, self-play, evaluation, and utilities.
-- `config/` training and self-play YAML configs, plus `config/accelerate/` for multi-GPU.
+- `scripts/` setup, data prep, training, evaluation, and utilities.
+- `config/` training YAML configs, plus `config/accelerate/` for multi-GPU.
 - `data/` SGF inputs and generated JSONL datasets.
 - `outputs/` model checkpoints.
 - `logs/` run logs.
@@ -37,6 +37,11 @@ for fast SGF parsing, self-play generation, and evaluation helpers.
 5. Run the full pipeline (optional):
 ```bash
 ./scripts/run_full_pipeline.sh
+```
+
+6. Run the full pipeline with automatic Hub publish:
+```bash
+./scripts/run_full_pipeline.sh --upload-to-hub --hf-repo-id username/go-rl-9x9-grpo
 ```
 
 If you want to verify your setup at any point:
@@ -123,18 +128,6 @@ python scripts/check_gpu_setup.py
 python scripts/validate_multi_gpu.py --verbose
 ```
 
-## Self-Play
-
-Generate self-play SGFs:
-```bash
-python scripts/run_self_play.py --config config/self_play_9x9.yaml
-```
-
-Filter or validate self-play games:
-```bash
-python scripts/filter_self_play_games.py --input data/self_play/9x9 --output data/self_play/9x9_filtered
-```
-
 ## Evaluation
 
 Create a KataGo match config and run evaluation:
@@ -143,23 +136,16 @@ python scripts/create_match_config.py \
   --output config/match_9x9.cfg \
   --board-size 9 \
   --num-games 200 \
-  --model-command "/path/to/your_gtp_engine --model outputs/grpo_9x9/final"
+  --model-command "/path/to/your_gtp_engine --model outputs/grpo_9x9"
 
 python scripts/eval_elo.py --katago-bin $KATAGO_BIN --match-config config/match_9x9.cfg
-```
-
-## Interactive Play
-
-Play against a trained model in the terminal:
-```bash
-python scripts/play_interactive.py --model outputs/grpo_9x9/final
 ```
 
 ## Upload to Hugging Face Hub
 
 Upload a trained model or LoRA adapter:
 ```bash
-python scripts/upload_to_hub.py --model outputs/grpo_9x9/final --repo-id username/go-rl-9x9-grpo --board-size 9
+python scripts/upload_to_hub.py --model outputs/grpo_9x9 --repo-id username/go-rl-9x9-grpo --board-size 9 --push-only
 ```
 
 ## Tests

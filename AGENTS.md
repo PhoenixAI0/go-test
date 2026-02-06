@@ -1,10 +1,10 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `go_rl/` holds the core Python library (board logic, KataGo integration, data prep, rewards, rollouts, prompting, self-play).
+- `go_rl/` holds the core Python library (board logic, KataGo integration, data prep, rewards, rollouts, prompting).
 - `go_parser/` contains an optional Go SGF parser for faster dataset building.
-- `scripts/` contains runnable entry points for setup, data prep, training, self-play, evaluation, and uploads.
-- `config/` provides YAML configs for SFT/GRPO/self-play, plus `config/accelerate/` for multi-GPU.
+- `scripts/` contains runnable entry points for setup, data prep, training, evaluation, and uploads.
+- `config/` provides YAML configs for SFT/GRPO, plus `config/accelerate/` for multi-GPU.
 - `data/` stores input SGFs and generated JSONL datasets.
 - `outputs/` contains model checkpoints.
 - `logs/` stores run logs.
@@ -29,16 +29,15 @@ Training:
 - `./scripts/train_sft.sh --board-size 9x9 --smoke`
 - `./scripts/train_grpo.sh --board-size 9x9 --smoke`
 - `./scripts/run_full_pipeline.sh --smoke`
+- `./scripts/run_full_pipeline.sh --upload-to-hub --hf-repo-id user/repo`
 - Multi-GPU uses `./scripts/train_sft.sh --multi-gpu 2` (configs in `config/accelerate/`).
 
-Self-play and evaluation:
-- `python scripts/run_self_play.py --config config/self_play_9x9.yaml`
+Evaluation:
 - `python scripts/create_match_config.py --output config/my_match.cfg --model-command "python ..."`
 - `python scripts/eval_elo.py --katago-bin $KATAGO_BIN --match-config config/my_match.cfg`
-- `python scripts/play_interactive.py --model outputs/grpo_9x9/final`
 
 Model upload:
-- `python scripts/upload_to_hub.py --model outputs/grpo_9x9/final --repo-id user/repo --board-size 9`
+- `python scripts/upload_to_hub.py --model outputs/grpo_9x9 --repo-id user/repo --board-size 9 --push-only`
 
 Testing:
 - `pytest`
