@@ -23,7 +23,7 @@ for fast SGF parsing, self-play generation, and evaluation helpers.
 
 2. Add SGF files to `data/sgf_9x9/` or `data/sgf_19x19/`.
 
-3. Build datasets (will attempt to install Go + compile the Go SGF parser if needed):
+3. Build datasets (compiles the Go SGF parser first, then falls back to Python parsing if needed):
 ```bash
 ./scripts/prepare_data.sh
 ```
@@ -82,10 +82,9 @@ Fast builder (auto-uses Go parser if present):
 python scripts/fast_build_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl
 ```
 
-Optional Go parser build (scripts will attempt install/build automatically if Go is missing):
+Manual Go parser compile:
 ```bash
-cd go_parser
-go build -o sgf_parser .
+./scripts/compile_go_parser.sh
 ```
 
 SGF download and validation helpers:

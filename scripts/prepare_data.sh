@@ -26,22 +26,9 @@ if [ -f .env ]; then
     source .env
 fi
 
-# Build Go SGF parser if available
-if ! command -v go &> /dev/null; then
-    echo -e "${YELLOW}Go not found; attempting install...${NC}"
-    ./scripts/install_go.sh || true
-    if [ -f scripts/go_env.sh ]; then
-        source scripts/go_env.sh
-    fi
-fi
-
-if command -v go &> /dev/null; then
-    if [ ! -x go_parser/sgf_parser ]; then
-        echo -e "${YELLOW}Building Go SGF parser...${NC}"
-        (cd go_parser && go build -o sgf_parser .)
-    fi
-else
-    echo -e "${YELLOW}Go not available; using Python SGF parsing${NC}"
+# Compile Go SGF parser first (fallback to Python parsing if unavailable).
+if ! ./scripts/compile_go_parser.sh; then
+    echo -e "${YELLOW}Go parser unavailable; using Python SGF parsing fallback${NC}"
 fi
 
 # Check if SGF files exist

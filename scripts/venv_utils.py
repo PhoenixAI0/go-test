@@ -60,10 +60,21 @@ def ensure_go_parser_binary() -> Path | None:
     parser_dir = repo_root / "go_parser"
     binary_path = parser_dir / "sgf_parser"
 
-    if binary_path.exists() and os.access(binary_path, os.X_OK):
-        return binary_path
+    if not parser_dir.exists():
+        print(
+            "Warning: go_parser directory not found; falling back to Python SGF parsing.",
+            file=sys.stderr,
+        )
+        return None
 
     go_bin = _find_go_binary()
+    if not go_bin and binary_path.exists() and os.access(binary_path, os.X_OK):
+        print(
+            "Warning: Go not found; using existing parser binary.",
+            file=sys.stderr,
+        )
+        return binary_path
+
     if not go_bin:
         install_script = repo_root / "scripts" / "install_go.sh"
         if install_script.exists() and os.access(install_script, os.X_OK):
@@ -77,18 +88,17 @@ def ensure_go_parser_binary() -> Path | None:
                 return None
             go_bin = _find_go_binary()
         if not go_bin:
+            if binary_path.exists() and os.access(binary_path, os.X_OK):
+                print(
+                    "Warning: Go not found; using existing parser binary.",
+                    file=sys.stderr,
+                )
+                return binary_path
             print(
                 "Warning: Go not found; falling back to Python SGF parsing.",
                 file=sys.stderr,
             )
             return None
-
-    if not parser_dir.exists():
-        print(
-            "Warning: go_parser directory not found; falling back to Python SGF parsing.",
-            file=sys.stderr,
-        )
-        return None
 
     try:
         subprocess.run(
