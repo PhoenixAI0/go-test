@@ -84,20 +84,18 @@ def is_legal_coords(
         return board.is_basic_legal(coords)
     if level == LegalityLevel.KO:
         return board.is_strict_legal(player, coords)
-    if level == LegalityLevel.SUPERKO:
-        try:
-            current, previous, history = _strict_state_with_history(board)
-            color = _STONE.get(player.upper())
-            if color is None:
-                return False
-            next_board = _apply_strict_move(current, color, coords)
-            is_legal, _ = validate_legality(
-                next_board, previous, history, LegalityLevel.SUPERKO
-            )
-            return is_legal
-        except Exception:
+    try:
+        current, previous, history = _strict_state_with_history(board)
+        color = _STONE.get(player.upper())
+        if color is None:
             return False
-    return board.is_basic_legal(coords)
+        next_board = _apply_strict_move(current, color, coords)
+        is_legal, _ = validate_legality(
+            next_board, previous, history, LegalityLevel.SUPERKO
+        )
+        return is_legal
+    except Exception:
+        return False
 
 
 def is_legal_move(

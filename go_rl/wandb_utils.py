@@ -17,29 +17,6 @@ def configure_wandb(
     tags: Optional[list[str]] = None,
     notes: Optional[str] = None,
 ) -> bool:
-    """
-    Configure Weights & Biases (wandb) for experiment tracking.
-
-    Args:
-        enabled: Whether to enable wandb tracking.
-        run_name: Name for this training run.
-        project: W&B project name.
-        entity: W&B entity/team name.
-        mode: W&B mode ("online", "offline", "disabled").
-        config: Optional config dictionary to log to wandb.
-        tags: Optional list of tags for this run.
-        notes: Optional notes/description for this run.
-
-    Returns:
-        True if wandb was successfully configured, False otherwise.
-
-    Best Practices (2026):
-        - Always log hyperparameters (model, learning rate, batch size, etc.)
-        - Use descriptive run names with timestamps
-        - Tag runs by experiment type (sft, grpo, fp8, etc.)
-        - Log GPU info, quantization settings, attention backend
-        - Track memory usage, throughput, and training speed metrics
-    """
     if not enabled and not project and not entity and not mode:
         return False
 
@@ -50,7 +27,6 @@ def configure_wandb(
         logger.info("Install with: uv pip install wandb")
         return False
 
-    # Set environment variables for wandb configuration
     if project:
         os.environ["WANDB_PROJECT"] = project
     if entity:
@@ -60,17 +36,12 @@ def configure_wandb(
 
     os.environ.setdefault("WANDB_RUN_NAME", run_name)
 
-    # Initialize wandb with enhanced configuration
     try:
-        # Get GPU info for logging
         gpu_info = get_gpu_info()
-
-        # Merge config with GPU info
         full_config = config or {}
         if gpu_info:
             full_config["gpu"] = gpu_info
 
-        # Initialize wandb run
         wandb.init(
             project=project or os.environ.get("WANDB_PROJECT"),
             entity=entity or os.environ.get("WANDB_ENTITY"),
@@ -78,7 +49,7 @@ def configure_wandb(
             config=full_config,
             tags=tags or [],
             notes=notes,
-            resume="allow",  # Allow resuming if run exists
+            resume="allow",
         )
 
         logger.info("Weights & Biases initialized successfully for run: %s", run_name)
@@ -91,8 +62,8 @@ def configure_wandb(
 
         return True
 
-    except Exception as e:
-        logger.warning("Failed to initialize wandb: %s", e)
+    except Exception as exc:
+        logger.warning("Failed to initialize wandb: %s", exc)
         logger.info("Continuing without wandb tracking")
         return False
 
@@ -102,32 +73,21 @@ def log_training_metrics(
     metrics: Dict[str, Any],
     commit: bool = True,
 ) -> None:
-    """
-    Log training metrics to wandb.
-
-    Args:
-        step: Current training step.
-        metrics: Dictionary of metrics to log (loss, accuracy, etc.).
-        commit: Whether to commit the log immediately.
-    """
     try:
         import wandb
+
         if wandb.run is not None:
             wandb.log(metrics, step=step, commit=commit)
     except ImportError:
         pass
-    except Exception as e:
-        logger.debug("Failed to log metrics to wandb: %s", e)
+    except Exception as exc:
+        logger.debug("Failed to log metrics to wandb: %s", exc)
 
 
 def log_system_metrics() -> None:
-    """
-    Log system metrics (GPU memory, utilization, etc.) to wandb.
-
-    This should be called periodically during training to track resource usage.
-    """
     try:
         import wandb
+
         if wandb.run is None:
             return
 
@@ -137,19 +97,14 @@ def log_system_metrics() -> None:
 
     except ImportError:
         pass
-    except Exception as e:
-        logger.debug("Failed to log system metrics: %s", e)
+    except Exception as exc:
+        logger.debug("Failed to log system metrics: %s", exc)
 
 
 def get_gpu_info() -> Optional[Dict[str, Any]]:
-    """
-    Get GPU information for logging.
-
-    Returns:
-        Dictionary with GPU info (name, memory, compute capability) or None.
-    """
     try:
         import torch
+
         if not torch.cuda.is_available():
             return {"available": False}
 
@@ -164,20 +119,15 @@ def get_gpu_info() -> Optional[Dict[str, Any]]:
             "compute_capability": f"{props.major}.{props.minor}",
             "cuda_version": torch.version.cuda,
         }
-    except Exception as e:
-        logger.debug("Failed to get GPU info: %s", e)
+    except Exception as exc:
+        logger.debug("Failed to get GPU info: %s", exc)
         return None
 
 
 def get_gpu_metrics() -> Optional[Dict[str, float]]:
-    """
-    Get current GPU metrics (memory usage, utilization).
-
-    Returns:
-        Dictionary with GPU metrics or None.
-    """
     try:
         import torch
+
         if not torch.cuda.is_available():
             return None
 
@@ -191,8 +141,8 @@ def get_gpu_metrics() -> Optional[Dict[str, float]]:
             "gpu/memory_reserved_gb": reserved,
             "gpu/memory_max_allocated_gb": max_allocated,
         }
-    except Exception as e:
-        logger.debug("Failed to get GPU metrics: %s", e)
+    except Exception as exc:
+        logger.debug("Failed to get GPU metrics: %s", exc)
         return None
 
 
@@ -200,10 +150,11 @@ def finish_wandb() -> None:
     """Finish the wandb run and upload final results."""
     try:
         import wandb
+
         if wandb.run is not None:
             wandb.finish()
             logger.info("Weights & Biases run finished successfully")
     except ImportError:
         pass
-    except Exception as e:
-        logger.warning("Error finishing wandb run: %s", e)
+    except Exception as exc:
+        logger.warning("Error finishing wandb run: %s", exc)
