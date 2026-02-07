@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 from typing import List
 
-from go_rl.sgf_utils import iter_sgf_samples
 from go_rl.logging_utils import setup_logging
 from venv_utils import ensure_virtualenv, run_go_parser
 
@@ -22,11 +21,9 @@ def _resolve_num_workers(requested: int) -> int:
 
 
 def _write_jsonl_batch(handle, records: List[dict]) -> None:
-    """Write a batch of records to JSONL file efficiently."""
     if not records:
         return
-    lines = [json.dumps(record) + "\n" for record in records]
-    handle.write("".join(lines))
+    handle.writelines(json.dumps(record) + "\n" for record in records)
 
 
 def main() -> None:
@@ -39,17 +36,7 @@ def main() -> None:
         "--num-workers",
         type=int,
         default=0,
-        help="Number of parallel workers (0 = auto-detect, 1 = sequential)",
-    )
-    parser.add_argument(
-        "--no-parallel",
-        action="store_true",
-        help="Disable parallel processing",
-    )
-    parser.add_argument(
-        "--no-go-parser",
-        action="store_true",
-        help="Disable Go parser (use Python parsing)",
+        help="Go parser worker count (0 = auto-detect)",
     )
     parser.add_argument(
         "--batch-size",
@@ -66,7 +53,6 @@ def main() -> None:
 
     setup_logging(args.log_level)
     logger.info("Building RL prompt dataset")
-    logger.debug("Parallel processing: %s (workers: %d)", not args.no_parallel, args.num_workers)
     logger.debug("Batch size: %d", args.batch_size)
 
     output = Path(args.output)
@@ -77,52 +63,31 @@ def main() -> None:
     batch: List[dict] = []
 
     with output.open("w", encoding="utf-8", buffering=8192 * 16) as handle:
-        used_go_parser = False
         go_parser_output = output.parent / f"__go_parser_{output.stem}.jsonl"
-        if not args.no_go_parser:
-            logger.info("Attempting Go parser build for faster dataset generation")
-            used_go_parser = run_go_parser(
-                sgf_dir=args.sgf_dir,
-                output_path=str(go_parser_output),
-                max_positions=args.max_positions,
-                num_workers=num_workers,
-            )
+        logger.info("Building intermediate dataset with Go parser")
+        run_go_parser(
+            sgf_dir=args.sgf_dir,
+            output_path=str(go_parser_output),
+            max_positions=args.max_positions,
+            num_workers=num_workers,
+        )
 
-        if used_go_parser:
-            with go_parser_output.open("r", encoding="utf-8") as src:
-                for line in src:
-                    if not line.strip():
-                        continue
-                    sample = json.loads(line)
-                    batch.append({"prompt": sample["prompt"]})
-                    count += 1
-
-                    if len(batch) >= args.batch_size:
-                        _write_jsonl_batch(handle, batch)
-                        batch = []
-
-                        if count % 10000 == 0:
-                            logger.info("Written %d prompts...", count)
-            go_parser_output.unlink(missing_ok=True)
-        else:
-            for sample in iter_sgf_samples(
-                args.sgf_dir,
-                max_positions=args.max_positions,
-                num_workers=args.num_workers,
-                use_parallel=not args.no_parallel,
-            ):
+        with go_parser_output.open("r", encoding="utf-8") as src:
+            for line in src:
+                if not line.strip():
+                    continue
+                sample = json.loads(line)
                 batch.append({"prompt": sample["prompt"]})
                 count += 1
 
-                # Write batch when full
                 if len(batch) >= args.batch_size:
                     _write_jsonl_batch(handle, batch)
                     batch = []
 
                     if count % 10000 == 0:
                         logger.info("Written %d prompts...", count)
+        go_parser_output.unlink(missing_ok=True)
 
-        # Write remaining batch
         if batch:
             _write_jsonl_batch(handle, batch)
 

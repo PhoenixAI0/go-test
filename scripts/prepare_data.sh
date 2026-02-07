@@ -26,10 +26,8 @@ if [ -f .env ]; then
     source .env
 fi
 
-# Compile Go SGF parser first (fallback to Python parsing if unavailable).
-if ! ./scripts/compile_go_parser.sh; then
-    echo -e "${YELLOW}Go parser unavailable; using Python SGF parsing fallback${NC}"
-fi
+# Compile Go SGF parser first.
+./scripts/compile_go_parser.sh
 
 # Check if SGF files exist
 SGF_9x9_COUNT=$(find data/sgf_9x9 -name "*.sgf" 2>/dev/null | wc -l)

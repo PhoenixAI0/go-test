@@ -1,12 +1,12 @@
 # Go RL Training Utilities
 
 This repo provides Go RL data prep, prompting utilities, and training entry points
-for SFT and GRPO using KataGo-based rewards. It also includes optional Go tooling
-for fast SGF parsing and evaluation helpers.
+for SFT and GRPO using KataGo-based rewards. Dataset parsing is handled by the Go
+`sgf_parser` tool.
 
 **Repo layout**
 - `go_rl/` core Python library.
-- `go_parser/` optional Go SGF parser (builds a `sgf_parser` binary).
+- `go_parser/` Go SGF parser (builds a `sgf_parser` binary).
 - `scripts/` setup, data prep, training, evaluation, and utilities.
 - `config/` training YAML configs, plus `config/accelerate/` for multi-GPU.
 - `data/` SGF inputs and generated JSONL datasets.
@@ -23,7 +23,7 @@ for fast SGF parsing and evaluation helpers.
 
 2. Add SGF files to `data/sgf_9x9/` or `data/sgf_19x19/`.
 
-3. Build datasets (compiles the Go SGF parser first, then falls back to Python parsing if needed):
+3. Build datasets (compiles and uses the Go SGF parser):
 ```bash
 ./scripts/prepare_data.sh
 ```
@@ -82,7 +82,7 @@ python scripts/build_sft_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9
 python scripts/build_rl_prompts.py --sgf-dir data/sgf_9x9 --output data/rl_prompts_9x9.jsonl
 ```
 
-Fast builder (auto-uses Go parser if present):
+Fast builder:
 ```bash
 python scripts/fast_build_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl
 ```
