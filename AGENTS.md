@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 - `go_rl/` holds the core Python library (board logic, KataGo integration, data prep, rewards, rollouts, prompting).
-- `go_parser/` contains the Go SGF parser used for dataset building.
+- `go_parser/` contains an optional Go SGF parser for faster dataset building.
 - `scripts/` contains runnable entry points for setup, data prep, training, evaluation, and uploads.
 - `config/` provides YAML configs for SFT/GRPO, plus `config/accelerate/` for multi-GPU.
 - `data/` stores input SGFs and generated JSONL datasets.
@@ -13,7 +13,7 @@
 - `test.py` is a scratch file, not a test suite.
 
 ## Build, Test, and Development Commands
-This repo is Python-first for training/inference code. SGF dataset parsing relies on the Go SGF parser (`go_parser/sgf_parser`); scripts will install Go and compile the parser when needed.
+This repo is Python-first. There is no required build step for the core pipeline, but the optional Go SGF parser (`go_parser/sgf_parser`) can be compiled for faster dataset building. Scripts will attempt to install Go and compile it by default when Go is missing.
 
 Setup and validation:
 - `./scripts/setup_environment.sh` creates `.venv`, installs deps, downloads KataGo, and writes `.env` (Linux + NVIDIA GPU).
