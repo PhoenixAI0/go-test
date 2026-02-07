@@ -21,7 +21,12 @@ from go_rl.training_utils import (
     get_optimal_attention_backend,
     quantization_kwargs,
 )
-from go_rl.wandb_utils import configure_wandb, finish_wandb, log_system_metrics
+from go_rl.wandb_utils import (
+    configure_wandb,
+    finish_wandb,
+    log_system_metrics,
+    log_training_metrics,
+)
 from venv_utils import ensure_virtualenv
 
 logger = logging.getLogger(__name__)
@@ -120,6 +125,25 @@ def build_reward_fn(
         return rewards
 
     return reward_fn
+
+
+def _log_grpo_reward_history(log_history: list[dict], wandb_enabled: bool) -> None:
+    if not wandb_enabled:
+        return
+    for entry in log_history:
+        step = entry.get("step")
+        if step is None:
+            continue
+        metrics: Dict[str, float] = {}
+        for key, value in entry.items():
+            if key == "step":
+                continue
+            if "reward" in key.lower():
+                metrics[f"grpo/{key}"] = float(value)
+        if "loss" in entry:
+            metrics["grpo/loss"] = float(entry["loss"])
+        if metrics:
+            log_training_metrics(step=int(step), metrics=metrics, commit=False)
 
 
 def main() -> None:
@@ -396,6 +420,10 @@ def main() -> None:
         try:
             trainer.train()
             logger.info("GRPO training completed successfully")
+            if is_main_process:
+                _log_grpo_reward_history(
+                    trainer.state.log_history, wandb_enabled=wandb_enabled
+                )
         finally:
             # Log final GPU metrics
             if wandb_enabled and is_main_process:

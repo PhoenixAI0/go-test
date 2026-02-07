@@ -13,3 +13,5 @@ use_packing: true
 use_8bit_optimizer: true
 quantization_bits: 8
 seed: 3407
+eval_split_ratio: 0.05
+eval_steps: 200

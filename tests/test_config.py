@@ -257,6 +257,28 @@ def test_sft_config_defaults():
     assert config.use_8bit_optimizer is True
     assert config.quantization_bits == 8
     assert config.seed == 3407
+    assert config.eval_split_ratio == 0.05
+    assert config.eval_steps == 200
+
+
+def test_sft_config_invalid_eval_split_ratio():
+    with pytest.raises(ValueError, match="eval_split_ratio must be in"):
+        SftConfig(
+            dataset_path="/data/sft.jsonl",
+            model_name="gpt2",
+            output_dir="/output",
+            eval_split_ratio=1.0,
+        )
+
+
+def test_sft_config_invalid_eval_steps():
+    with pytest.raises(ValueError, match="eval_steps must be >= 1"):
+        SftConfig(
+            dataset_path="/data/sft.jsonl",
+            model_name="gpt2",
+            output_dir="/output",
+            eval_steps=0,
+        )
 
 
 def test_load_yaml_success(tmp_path):

@@ -34,14 +34,20 @@ for SFT and GRPO using KataGo-based rewards. Dataset parsing is handled by the G
 ./scripts/train_grpo.sh --smoke
 ```
 
-5. Run the full pipeline (optional):
+5. Run the full pipeline (default includes 9x9 GRPO -> promotion gate -> 19x19 GRPO):
 ```bash
-./scripts/run_full_pipeline.sh
+./scripts/run_full_pipeline.sh \
+  --model-command-template "python /path/to/your_gtp_engine.py --model {MODEL_DIR}"
 ```
+
+To skip all evaluation and promotion-gate checks, pass `--no-eval`.
 
 6. Run the full pipeline with automatic Hub publish:
 ```bash
-./scripts/run_full_pipeline.sh --upload-to-hub --hf-repo-id username/go-rl-9x9-grpo
+./scripts/run_full_pipeline.sh \
+  --model-command-template "python /path/to/your_gtp_engine.py --model {MODEL_DIR}" \
+  --upload-to-hub \
+  --hf-repo-id username/go-rl-grpo
 ```
 
 If you want to verify your setup at any point:
@@ -113,6 +119,7 @@ Common flags:
 - `--debug` for verbose logs.
 - `--gradient-checkpointing` for memory savings.
 - `--multi-gpu 2|4|8|auto` for DDP via `accelerate`.
+- SFT now logs train/val loss and perplexity to W&B (validation split controlled by `eval_split_ratio` and `eval_steps` in SFT config).
 
 Direct Python entry points:
 ```bash
@@ -139,6 +146,15 @@ python scripts/create_match_config.py \
   --model-command "/path/to/your_gtp_engine --model outputs/grpo_9x9"
 
 python scripts/eval_elo.py --katago-bin $KATAGO_BIN --match-config config/match_9x9.cfg
+```
+
+`eval_elo.py` can also write structured metrics and log to W&B:
+```bash
+python scripts/eval_elo.py \
+  --katago-bin $KATAGO_BIN \
+  --match-config config/match_9x9.cfg \
+  --summary-json logs/matches/match_9x9_summary.json \
+  --wandb --wandb-project go-rl
 ```
 
 ## Upload to Hugging Face Hub

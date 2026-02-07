@@ -103,6 +103,8 @@ class SftConfig:
     use_8bit_optimizer: bool = True
     quantization_bits: int = 8
     seed: int = 3407
+    eval_split_ratio: float = 0.05
+    eval_steps: int = 200
 
     def __post_init__(self) -> None:
         self.dataset_path = _expand_path(self.dataset_path)
@@ -112,6 +114,10 @@ class SftConfig:
             raise ValueError(
                 "quantization_bits must be one of 0, 4, 8, 16, or 32."
             )
+        if self.eval_split_ratio < 0.0 or self.eval_split_ratio >= 1.0:
+            raise ValueError("eval_split_ratio must be in [0.0, 1.0).")
+        if self.eval_steps < 1:
+            raise ValueError("eval_steps must be >= 1.")
 
 
 def _load_yaml(path: str) -> Dict[str, Any]:

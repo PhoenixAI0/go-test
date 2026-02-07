@@ -31,3 +31,7 @@ quantization_bits: 8
 
 # Random seed for reproducibility
 seed: 3407
+
+# Validation split and eval cadence for W&B loss/perplexity tracking
+eval_split_ratio: 0.05
+eval_steps: 200

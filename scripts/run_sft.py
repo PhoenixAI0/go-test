@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 from dataclasses import asdict
 from pathlib import Path
 from typing import Dict
@@ -15,7 +16,12 @@ from go_rl.training_utils import (
     get_optimal_attention_backend,
     quantization_kwargs,
 )
-from go_rl.wandb_utils import configure_wandb, finish_wandb, log_system_metrics
+from go_rl.wandb_utils import (
+    configure_wandb,
+    finish_wandb,
+    log_system_metrics,
+    log_training_metrics,
+)
 from venv_utils import ensure_virtualenv
 
 logger = logging.getLogger(__name__)
@@ -23,6 +29,30 @@ logger = logging.getLogger(__name__)
 
 def format_example(example: Dict[str, str]) -> str:
     return f"{example['prompt']}\n{example['response']}"
+
+
+def _safe_perplexity(loss_value: float) -> float:
+    return math.exp(min(loss_value, 20.0))
+
+
+def _log_perplexity_history(log_history: list[dict], wandb_enabled: bool) -> None:
+    if not wandb_enabled:
+        return
+    for entry in log_history:
+        step = entry.get("step")
+        if step is None:
+            continue
+        metrics: Dict[str, float] = {}
+        if "loss" in entry:
+            train_loss = float(entry["loss"])
+            metrics["train/loss"] = train_loss
+            metrics["train/perplexity"] = _safe_perplexity(train_loss)
+        if "eval_loss" in entry:
+            val_loss = float(entry["eval_loss"])
+            metrics["val/loss"] = val_loss
+            metrics["val/perplexity"] = _safe_perplexity(val_loss)
+        if metrics:
+            log_training_metrics(step=int(step), metrics=metrics, commit=False)
 
 
 def main() -> None:
@@ -110,6 +140,8 @@ def main() -> None:
         "gradient_checkpointing": args.gradient_checkpointing,
         "attention_backend": attention_backend or "default",
         "torch_compile": args.enable_compile,
+        "eval_split_ratio": cfg.eval_split_ratio,
+        "eval_steps": cfg.eval_steps,
     }
     wandb_tags = ["sft", quant_type]
     if args.use_fp8:
@@ -161,7 +193,25 @@ def main() -> None:
         smoke_count = min(len(dataset), 32)
         logger.info("Smoke run enabled: using %d rows", smoke_count)
         dataset = dataset.select(range(smoke_count))
-    logger.info("Dataset rows: %d", len(dataset))
+
+    train_dataset = dataset
+    eval_dataset = None
+    if cfg.eval_split_ratio > 0.0 and len(dataset) > 1:
+        eval_size = max(1, int(round(len(dataset) * cfg.eval_split_ratio)))
+        eval_size = min(eval_size, len(dataset) - 1)
+        split = dataset.train_test_split(
+            test_size=eval_size,
+            seed=cfg.seed,
+            shuffle=True,
+        )
+        train_dataset = split["train"]
+        eval_dataset = split["test"]
+    logger.info(
+        "Dataset rows: total=%d train=%d eval=%d",
+        len(dataset),
+        len(train_dataset),
+        len(eval_dataset) if eval_dataset is not None else 0,
+    )
     Path(cfg.output_dir).mkdir(parents=True, exist_ok=True)
     log_path = write_run_log(
         cfg.log_dir,
@@ -170,7 +220,9 @@ def main() -> None:
         asdict(cfg),
         extra={
             "smoke": args.smoke,
-            "dataset_rows": len(dataset),
+            "dataset_rows_total": len(dataset),
+            "dataset_rows_train": len(train_dataset),
+            "dataset_rows_eval": len(eval_dataset) if eval_dataset is not None else 0,
             "wandb": {
                 "enabled": wandb_enabled,
                 "project": args.wandb_project,
@@ -187,6 +239,7 @@ def main() -> None:
         "output_dir": cfg.output_dir,
         "num_train_epochs": 1 if args.smoke else cfg.epochs,
         "per_device_train_batch_size": cfg.batch_size,
+        "per_device_eval_batch_size": cfg.batch_size,
         "learning_rate": cfg.learning_rate,
         "max_seq_length": cfg.max_seq_length,
         "logging_steps": 1 if args.smoke else 10,
@@ -205,21 +258,48 @@ def main() -> None:
     if args.gradient_checkpointing:
         trainer_args["gradient_checkpointing"] = "unsloth"
         trainer_args["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
+    if eval_dataset is not None:
+        trainer_args["eval_strategy"] = "steps"
+        trainer_args["eval_steps"] = 1 if args.smoke else cfg.eval_steps
     if wandb_enabled:
         trainer_args["report_to"] = ["wandb"]
         trainer_args["run_name"] = run_name
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         formatting_func=format_example,
         args=SFTConfig(**trainer_args),
     )
     # Train with periodic GPU metrics logging
     logger.info("Starting training...")
     try:
-        trainer.train()
+        train_result = trainer.train()
         logger.info("Training completed successfully")
+        _log_perplexity_history(trainer.state.log_history, wandb_enabled=wandb_enabled)
+        if wandb_enabled:
+            final_train_loss = train_result.metrics.get("train_loss")
+            if final_train_loss is not None:
+                log_training_metrics(
+                    step=int(train_result.metrics.get("global_step", 0)),
+                    metrics={
+                        "train/final_loss": float(final_train_loss),
+                        "train/final_perplexity": _safe_perplexity(float(final_train_loss)),
+                    },
+                )
+        if eval_dataset is not None:
+            eval_metrics = trainer.evaluate()
+            logger.info("Final validation metrics: %s", eval_metrics)
+            if wandb_enabled and "eval_loss" in eval_metrics:
+                eval_loss = float(eval_metrics["eval_loss"])
+                log_training_metrics(
+                    step=int(train_result.metrics.get("global_step", 0)),
+                    metrics={
+                        "val/final_loss": eval_loss,
+                        "val/final_perplexity": _safe_perplexity(eval_loss),
+                    },
+                )
     finally:
         # Log final GPU metrics
         if wandb_enabled:
