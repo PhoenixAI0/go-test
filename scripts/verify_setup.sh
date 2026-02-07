@@ -138,6 +138,14 @@ else
     WARNINGS=$((WARNINGS + 1))
 fi
 
+# Optional artifact: full-game GRPO model
+echo -n "9b. Full-game GRPO artifact (optional): "
+if [ -d "outputs/grpo_fullgame_19x19" ]; then
+    echo -e "${GREEN}✓ Found outputs/grpo_fullgame_19x19${NC}"
+else
+    echo -e "${YELLOW}⚠ Not found (optional)${NC}"
+fi
+
 # Check 10: GPU
 echo -n "10. NVIDIA GPU: "
 if command -v nvidia-smi &>/dev/null; then
@@ -157,7 +165,11 @@ for script in scripts/setup_environment.sh scripts/prepare_data.sh scripts/train
     [ -x "$script" ] && EXEC_COUNT=$((EXEC_COUNT + 1))
 done
 
-if [ $EXEC_COUNT -eq 5 ]; then
+for script in scripts/train_grpo_fullgame.sh; do
+    [ -x "$script" ] && EXEC_COUNT=$((EXEC_COUNT + 1))
+done
+
+if [ $EXEC_COUNT -eq 6 ]; then
     echo -e "${GREEN}✓ All executable${NC}"
 else
     echo -e "${YELLOW}⚠ Some not executable${NC}"
@@ -167,7 +179,7 @@ fi
 
 # Check 12: Config files
 echo -n "12. Config files: "
-if [ -f "config/sft_warm_start.yaml" ] && [ -f "config/grpo_9x9.yaml" ]; then
+if [ -f "config/sft_warm_start.yaml" ] && [ -f "config/grpo_9x9.yaml" ] && [ -f "config/grpo_fullgame_19x19.yaml" ]; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗ Missing configs${NC}"
@@ -183,6 +195,7 @@ if [ $ERRORS -eq 0 ] && [ $WARNINGS -eq 0 ]; then
     echo "You can now run training:"
     echo "  ./scripts/train_sft.sh --smoke    # Test SFT"
     echo "  ./scripts/train_grpo.sh --smoke   # Test GRPO"
+    echo "  ./scripts/train_grpo_fullgame.sh --smoke --fullgame-smoke-plies 20   # Test full-game GRPO"
     echo "  ./scripts/run_full_pipeline.sh    # Full pipeline"
 elif [ $ERRORS -eq 0 ]; then
     echo -e "${YELLOW}⚠ Setup mostly complete with $WARNINGS warning(s)${NC}"

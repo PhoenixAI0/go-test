@@ -39,3 +39,8 @@ rollout:
   stop_at_pass: true
 notes:
   promotion_gate: Train 19x19 after the 9x9 promotion gate is met.
+promotion_gate_fullgame:
+  metric: winrate
+  threshold_winrate: 0.55
+  evaluation_games: 200
+  notes: Promote to full-game GRPO when 19x19 winrate threshold is met.

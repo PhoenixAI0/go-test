@@ -1,0 +1,51 @@
+dataset: data/rl_prompts_19x19.jsonl
+training:
+  model_name: outputs/grpo_19x19
+  output_dir: outputs/grpo_fullgame_19x19
+  log_dir: logs/grpo_fullgame_19x19
+  max_seq_length: 4096
+  batch_size: 1
+  gradient_accumulation: 8
+  learning_rate: 8e-6
+  num_steps: 3000
+  seed: 3407
+  lora_rank: 64
+  lora_alpha: 16
+  lora_dropout: 0.0
+  use_lora: true
+  grpo_mini_batch: 1
+  grpo_logit_chunk_multiplier: 8
+  use_8bit_optimizer: true
+  quantization_bits: 8
+katago:
+  binary_path: ${KATAGO_BIN}
+  model_path: ${KATAGO_MODEL}
+  config_path: ${KATAGO_CONFIG}
+  board_size: 19
+  rules: chinese
+  komi: 7.5
+reward:
+  winrate_scale: 0.0
+  legal_bonus: 0.2
+  illegal_penalty: -1.0
+  length_penalty: -0.05
+  full_game_bonus: 0.0
+  scorelead_scale: 0.02
+  terminal_outcome_bonus: 1.0
+  illegal_move_ends_game: true
+  strict_legality: true
+rollout:
+  num_samples: 6
+  temperature: 0.8
+  top_p: 0.9
+  max_tokens: 6
+  stop_at_pass: true
+full_game:
+  enabled: true
+  max_plies: 300
+  termination_two_passes: true
+  opponent_policy: katago_best
+  model_color_mode: alternate
+  seed_empty_board_prob: 0.4
+  max_seed_prefix_moves: 40
+  max_model_turns: 150

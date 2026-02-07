@@ -6,7 +6,13 @@ import pytest
 
 from go_rl.board import BoardState
 from go_rl.config import KataGoConfig
-from go_rl.katago import KataGoAnalysisClient, KataGoResult, _extract_winrate
+from go_rl.katago import (
+    KataGoAnalysisClient,
+    KataGoResult,
+    _extract_best_move,
+    _extract_score_lead,
+    _extract_winrate,
+)
 
 
 @pytest.fixture
@@ -55,6 +61,26 @@ def test_extract_winrate_missing_winrate():
     response = {"rootInfo": {"moves": []}}
     with pytest.raises(KeyError, match="missing rootInfo.winrate"):
         _extract_winrate(response)
+
+
+def test_extract_score_lead_success():
+    response = {"rootInfo": {"scoreLead": 3.5}}
+    assert _extract_score_lead(response) == 3.5
+
+
+def test_extract_score_lead_missing():
+    response = {"rootInfo": {"winrate": 0.55}}
+    assert _extract_score_lead(response) is None
+
+
+def test_extract_best_move_success():
+    response = {"moveInfos": [{"move": "q16"}]}
+    assert _extract_best_move(response) == "Q16"
+
+
+def test_extract_best_move_missing():
+    response = {"moveInfos": []}
+    assert _extract_best_move(response) is None
 
 
 def test_katago_client_init(katago_config):
@@ -181,7 +207,11 @@ def test_katago_send_empty_response(mock_popen, katago_config, mock_process):
 @patch("subprocess.Popen")
 def test_katago_analyze_position(mock_popen, katago_config, mock_process):
     mock_popen.return_value = mock_process
-    response_data = {"id": 1, "rootInfo": {"winrate": 0.65}}
+    response_data = {
+        "id": 1,
+        "rootInfo": {"winrate": 0.65, "scoreLead": 1.2},
+        "moveInfos": [{"move": "D4"}],
+    }
     mock_process.stdout.readline.return_value = json.dumps(response_data) + "\n"
 
     client = KataGoAnalysisClient(katago_config)
@@ -195,6 +225,8 @@ def test_katago_analyze_position(mock_popen, katago_config, mock_process):
 
     assert isinstance(result, KataGoResult)
     assert result.winrate == 0.65
+    assert result.score_lead == 1.2
+    assert result.best_move == "D4"
     assert result.raw == response_data
     assert client._next_id == 2  # Should increment
 
@@ -307,6 +339,55 @@ def test_katago_analyze_with_pass_move(mock_popen, katago_config, mock_process):
 
     client.analyze_position(board)
 
+    written_data = mock_process.stdin.write.call_args[0][0]
+    payload = json.loads(written_data.strip())
+    assert payload["moves"] == [["b", "pass"]]
+
+
+@patch("subprocess.Popen")
+def test_katago_choose_move_uses_best(mock_popen, katago_config, mock_process):
+    mock_popen.return_value = mock_process
+    response_data = {
+        "id": 1,
+        "rootInfo": {"winrate": 0.5, "scoreLead": 0.0},
+        "moveInfos": [{"move": "D4"}],
+    }
+    mock_process.stdout.readline.return_value = json.dumps(response_data) + "\n"
+
+    client = KataGoAnalysisClient(katago_config)
+    client.start()
+    board = BoardState.empty(9)
+    assert client.choose_move(board, player="B") == "D4"
+
+
+@patch("subprocess.Popen")
+def test_katago_choose_move_fallback_pass(mock_popen, katago_config, mock_process):
+    mock_popen.return_value = mock_process
+    response_data = {"id": 1, "rootInfo": {"winrate": 0.5}, "moveInfos": []}
+    mock_process.stdout.readline.return_value = json.dumps(response_data) + "\n"
+
+    client = KataGoAnalysisClient(katago_config)
+    client.start()
+    board = BoardState.empty(9)
+    assert client.choose_move(board, player="B") == "PASS"
+
+
+@patch("subprocess.Popen")
+def test_katago_choose_move_respects_requested_player(mock_popen, katago_config, mock_process):
+    mock_popen.return_value = mock_process
+    response_data = {
+        "id": 1,
+        "rootInfo": {"winrate": 0.5, "scoreLead": 0.0},
+        "moveInfos": [{"move": "D4"}],
+    }
+    mock_process.stdout.readline.return_value = json.dumps(response_data) + "\n"
+
+    client = KataGoAnalysisClient(katago_config)
+    client.start()
+    board = BoardState.empty(9)  # B to move
+
+    # Ask for W move explicitly; choose_move should align analysis by inserting B PASS.
+    assert client.choose_move(board, player="W") == "D4"
     written_data = mock_process.stdin.write.call_args[0][0]
     payload = json.loads(written_data.strip())
     assert payload["moves"] == [["b", "pass"]]

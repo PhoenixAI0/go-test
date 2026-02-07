@@ -17,8 +17,10 @@ echo "  4. Evaluation (SFT -> KataGo match, unless --no-eval)"
 echo "  5. GRPO 9x9"
 echo "  6. Evaluation + promotion gate (before 19x19, unless --no-eval)"
 echo "  7. GRPO 19x19 curriculum stage"
-echo "  8. Evaluation before upload (unless --no-eval)"
-echo "  9. Optional upload to Hugging Face Hub"
+echo "  8. Evaluation + promotion gate (before full-game GRPO, unless --no-eval)"
+echo "  9. Full-game GRPO 19x19 (conditional)"
+echo " 10. Final evaluation before upload (unless --no-eval)"
+echo " 11. Optional upload to Hugging Face Hub"
 echo ""
 
 # Colors for output
@@ -31,6 +33,7 @@ NC='\033[0m'
 SKIP_SETUP=false
 SKIP_DATA=false
 SKIP_SFT=false
+SKIP_FULLGAME=false
 SMOKE_TEST=false
 USE_WANDB=false
 WANDB_PROJECT="go-rl"
@@ -48,6 +51,7 @@ EVAL_KOMI=7.5
 EVAL_RULES="chinese"
 EVAL_SGF_ROOT="match_sgfs"
 EVAL_LOG_ROOT="logs/matches"
+FULLGAME_SMOKE_PLIES=""
 
 # Promotion gate values (loaded from config/grpo_9x9.yaml)
 PROMOTION_METRIC="elo_delta_or_winrate"
@@ -55,8 +59,18 @@ PROMOTION_THRESHOLD_ELO="150"
 PROMOTION_THRESHOLD_WINRATE="0.55"
 PROMOTION_EVAL_GAMES="200"
 
+FULLGAME_PROMOTION_METRIC="winrate"
+FULLGAME_PROMOTION_THRESHOLD_ELO="150"
+FULLGAME_PROMOTION_THRESHOLD_WINRATE="0.55"
+FULLGAME_PROMOTION_EVAL_GAMES="200"
+
 LAST_EVAL_SUMMARY=""
 LAST_EVALUATED_MODEL_DIR=""
+FULLGAME_GATE_PASSED=false
+FULLGAME_COMPLETED=false
+FINAL_MODEL_DIR="outputs/grpo_19x19"
+FINAL_BOARD_SIZE="19x19"
+FINAL_BOARD_NUM=19
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -70,6 +84,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-sft)
             SKIP_SFT=true
+            shift
+            ;;
+        --skip-fullgame)
+            SKIP_FULLGAME=true
             shift
             ;;
         --smoke)
@@ -140,6 +158,10 @@ while [[ $# -gt 0 ]]; do
             EVAL_LOG_ROOT="$2"
             shift 2
             ;;
+        --fullgame-smoke-plies)
+            FULLGAME_SMOKE_PLIES="$2"
+            shift 2
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -147,6 +169,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --skip-setup               Skip environment setup"
             echo "  --skip-data                Skip data preparation"
             echo "  --skip-sft                 Skip 9x9 SFT stage"
+            echo "  --skip-fullgame            Skip full-game GRPO stage"
             echo "  --smoke                    Run smoke tests instead of full training"
             echo "  --wandb                    Enable Weights & Biases logging"
             echo "  --wandb-project NAME       W&B project name (default: go-rl)"
@@ -161,6 +184,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --eval-rules RULES         Ruleset for evaluation (default: chinese)"
             echo "  --eval-sgf-root DIR        SGF output root (default: match_sgfs)"
             echo "  --eval-log-root DIR        Eval logs/config root (default: logs/matches)"
+            echo "  --fullgame-smoke-plies N   Override full-game max plies during step 4"
             echo "  --upload-to-hub            Upload final model to Hugging Face Hub"
             echo "  --hf-repo-id ID            Hugging Face repo id (required with upload)"
             echo "  --hf-private               Create/use private HF repository"
@@ -229,9 +253,37 @@ PY
     PROMOTION_EVAL_GAMES="${gate_values[3]:-200}"
 }
 
+load_fullgame_promotion_gate_from_config() {
+    local cfg_path="$1"
+    local gate_values=()
+    local gate_line
+    while IFS= read -r gate_line; do
+        gate_values+=("$gate_line")
+    done < <(
+        python - "$cfg_path" <<'PY'
+import sys
+import yaml
+
+cfg = yaml.safe_load(open(sys.argv[1], "r", encoding="utf-8")) or {}
+gate = cfg.get("promotion_gate_fullgame") or {}
+print(gate.get("metric", "winrate"))
+print(gate.get("threshold_elo", 150))
+print(gate.get("threshold_winrate", 0.55))
+print(gate.get("evaluation_games", 200))
+PY
+    )
+    FULLGAME_PROMOTION_METRIC="${gate_values[0]:-winrate}"
+    FULLGAME_PROMOTION_THRESHOLD_ELO="${gate_values[1]:-150}"
+    FULLGAME_PROMOTION_THRESHOLD_WINRATE="${gate_values[2]:-0.55}"
+    FULLGAME_PROMOTION_EVAL_GAMES="${gate_values[3]:-200}"
+}
+
 evaluate_promotion_gate() {
     local summary_json="$1"
-    python - "$summary_json" "$PROMOTION_METRIC" "$PROMOTION_THRESHOLD_ELO" "$PROMOTION_THRESHOLD_WINRATE" <<'PY'
+    local metric="$2"
+    local threshold_elo="$3"
+    local threshold_winrate="$4"
+    python - "$summary_json" "$metric" "$threshold_elo" "$threshold_winrate" <<'PY'
 import json
 import sys
 
@@ -386,6 +438,20 @@ run_train_grpo() {
     "${GRPO_CMD[@]}"
 }
 
+run_train_grpo_fullgame() {
+    local -a FULLGAME_CMD=(./scripts/train_grpo_fullgame.sh)
+    if [ "$SMOKE_TEST" = true ]; then
+        FULLGAME_CMD+=(--smoke)
+    fi
+    if [ "$USE_WANDB" = true ]; then
+        FULLGAME_CMD+=(--wandb --wandb-project "$WANDB_PROJECT")
+    fi
+    if [ -n "$FULLGAME_SMOKE_PLIES" ]; then
+        FULLGAME_CMD+=(--fullgame-smoke-plies "$FULLGAME_SMOKE_PLIES")
+    fi
+    "${FULLGAME_CMD[@]}"
+}
+
 # Step 1: Environment setup
 if [ "$SKIP_SETUP" = false ]; then
     echo ""
@@ -463,7 +529,11 @@ if [ "$RUN_EVAL" = true ]; then
         GATE_EVAL_GAMES=8
     fi
     run_katago_eval "grpo9_promotion_gate" "9x9" "outputs/grpo_9x9" "$GATE_EVAL_GAMES"
-    evaluate_promotion_gate "$LAST_EVAL_SUMMARY"
+    evaluate_promotion_gate \
+        "$LAST_EVAL_SUMMARY" \
+        "$PROMOTION_METRIC" \
+        "$PROMOTION_THRESHOLD_ELO" \
+        "$PROMOTION_THRESHOLD_WINRATE"
 else
     echo ""
     echo -e "${YELLOW}=========================================="
@@ -478,18 +548,69 @@ echo -e "${YELLOW}=========================================="
 echo "STEP 7: GRPO Training (19x19 Curriculum)"
 echo "==========================================${NC}"
 run_train_grpo "19x19"
-run_katago_eval "grpo19_final" "19x19" "outputs/grpo_19x19" "$EVAL_GAMES"
 
-# Step 8/9: Upload to Hugging Face Hub (optional)
+# Step 8: Evaluate 19x19 gate before full-game GRPO
+if [ "$RUN_EVAL" = true ]; then
+    load_fullgame_promotion_gate_from_config "config/grpo_19x19.yaml"
+    FULLGAME_GATE_EVAL_GAMES="$FULLGAME_PROMOTION_EVAL_GAMES"
+    if [ "$SMOKE_TEST" = true ] && [ "$FULLGAME_GATE_EVAL_GAMES" -gt 8 ]; then
+        FULLGAME_GATE_EVAL_GAMES=8
+    fi
+    run_katago_eval "grpo19_fullgame_gate" "19x19" "outputs/grpo_19x19" "$FULLGAME_GATE_EVAL_GAMES"
+    if evaluate_promotion_gate \
+        "$LAST_EVAL_SUMMARY" \
+        "$FULLGAME_PROMOTION_METRIC" \
+        "$FULLGAME_PROMOTION_THRESHOLD_ELO" \
+        "$FULLGAME_PROMOTION_THRESHOLD_WINRATE"; then
+        FULLGAME_GATE_PASSED=true
+    else
+        FULLGAME_GATE_PASSED=false
+    fi
+else
+    echo ""
+    echo -e "${YELLOW}=========================================="
+    echo "STEP 8: Full-game Promotion Gate"
+    echo "==========================================${NC}"
+    echo -e "${YELLOW}Skipping full-game promotion gate because --no-eval was set.${NC}"
+fi
+
+# Step 9: Full-game GRPO 19x19 (conditional)
+echo ""
+echo -e "${YELLOW}=========================================="
+echo "STEP 9: Full-Game GRPO (19x19)"
+echo "==========================================${NC}"
+if [ "$SKIP_FULLGAME" = true ]; then
+    echo -e "${YELLOW}Skipping full-game GRPO stage (--skip-fullgame).${NC}"
+elif [ "$RUN_EVAL" = false ]; then
+    echo -e "${YELLOW}Bypassing full-game promotion gate because --no-eval was set.${NC}"
+    run_train_grpo_fullgame
+    FULLGAME_COMPLETED=true
+    FINAL_MODEL_DIR="outputs/grpo_fullgame_19x19"
+elif [ "$FULLGAME_GATE_PASSED" != true ]; then
+    echo -e "${YELLOW}Skipping full-game GRPO stage because the promotion gate did not pass.${NC}"
+else
+    run_train_grpo_fullgame
+    FULLGAME_COMPLETED=true
+    FINAL_MODEL_DIR="outputs/grpo_fullgame_19x19"
+fi
+
+# Step 10: Final evaluation before upload
+if [ "$RUN_EVAL" = true ]; then
+    if [ "$FULLGAME_COMPLETED" = true ]; then
+        run_katago_eval "grpo_fullgame_19x19_final" "19x19" "$FINAL_MODEL_DIR" "$EVAL_GAMES"
+    elif [ "$LAST_EVALUATED_MODEL_DIR" != "outputs/grpo_19x19" ]; then
+        run_katago_eval "grpo19_final" "19x19" "outputs/grpo_19x19" "$EVAL_GAMES"
+    else
+        echo -e "${YELLOW}Skipping duplicate 19x19 final eval (already evaluated during full-game gate).${NC}"
+    fi
+fi
+
+# Step 11: Upload to Hugging Face Hub (optional)
 if [ "$UPLOAD_TO_HUB" = true ]; then
     echo ""
     echo -e "${YELLOW}=========================================="
-    echo "STEP 8: Upload to Hugging Face Hub"
+    echo "STEP 11: Upload to Hugging Face Hub"
     echo "==========================================${NC}"
-
-    FINAL_BOARD_SIZE="19x19"
-    FINAL_MODEL_DIR="outputs/grpo_19x19"
-    FINAL_BOARD_NUM=19
 
     if [ "$RUN_EVAL" = true ] && [ "$LAST_EVALUATED_MODEL_DIR" != "$FINAL_MODEL_DIR" ]; then
         run_katago_eval "pre_upload_final" "$FINAL_BOARD_SIZE" "$FINAL_MODEL_DIR" "$EVAL_GAMES"
@@ -535,6 +656,9 @@ echo "Artifacts:"
 echo "  - SFT model: outputs/sft_warm_start"
 echo "  - GRPO 9x9 model: outputs/grpo_9x9"
 echo "  - GRPO 19x19 model: outputs/grpo_19x19"
+if [ "$FULLGAME_COMPLETED" = true ]; then
+    echo "  - Full-game GRPO model: outputs/grpo_fullgame_19x19"
+fi
 echo "  - Logs: logs/"
 if [ "$RUN_EVAL" = true ] && [ -n "$LAST_EVAL_SUMMARY" ]; then
     echo "  - Last evaluation summary: $LAST_EVAL_SUMMARY"

@@ -7,7 +7,7 @@ import threading
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
 
-from .board import BoardState, coords_to_gtp
+from .board import BoardState, coords_to_gtp, gtp_to_coords
 from .config import KataGoConfig
 
 logger = logging.getLogger(__name__)
@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 class KataGoResult:
     winrate: float
     raw: Dict[str, object]
+    score_lead: Optional[float] = None
+    best_move: Optional[str] = None
 
 
 class KataGoAnalysisClient:
@@ -121,7 +123,14 @@ class KataGoAnalysisClient:
             )
             result = self._send(payload)
         winrate = _extract_winrate(result)
-        return KataGoResult(winrate=winrate, raw=result)
+        score_lead = _extract_score_lead(result)
+        best_move = _extract_best_move(result)
+        return KataGoResult(
+            winrate=winrate,
+            raw=result,
+            score_lead=score_lead,
+            best_move=best_move,
+        )
 
     def evaluate_moves(
         self,
@@ -144,9 +153,54 @@ class KataGoAnalysisClient:
             results[move] = analysis.winrate
         return results
 
+    def choose_move(self, board: BoardState, player: Optional[str] = None) -> str:
+        """Choose KataGo's best move for the provided board and player.
+
+        Falls back to PASS when no move is available or the suggested move is invalid.
+        """
+        move_player = player.strip().upper() if player else board.next_player()
+        analysis_board = BoardState(size=board.size, moves=list(board.moves))
+        if analysis_board.next_player() != move_player:
+            analysis_board.apply_move(analysis_board.next_player(), "PASS", strict=True)
+
+        analysis = self.analyze_position(analysis_board)
+        best_move = analysis.best_move
+        if not best_move:
+            return "PASS"
+        try:
+            coords = gtp_to_coords(best_move, board.size)
+        except Exception:
+            return "PASS"
+        if not analysis_board.is_strict_legal(move_player, coords):
+            return "PASS"
+        return best_move
+
 
 def _extract_winrate(result: Dict[str, object]) -> float:
     root_info = result.get("rootInfo")
     if isinstance(root_info, dict) and "winrate" in root_info:
         return float(root_info["winrate"])
     raise KeyError("KataGo response missing rootInfo.winrate")
+
+
+def _extract_score_lead(result: Dict[str, object]) -> Optional[float]:
+    root_info = result.get("rootInfo")
+    if isinstance(root_info, dict) and "scoreLead" in root_info:
+        return float(root_info["scoreLead"])
+    return None
+
+
+def _extract_best_move(result: Dict[str, object]) -> Optional[str]:
+    move_infos = result.get("moveInfos")
+    if not isinstance(move_infos, list) or not move_infos:
+        return None
+    best = move_infos[0]
+    if not isinstance(best, dict):
+        return None
+    move = best.get("move")
+    if not isinstance(move, str) or not move.strip():
+        return None
+    normalized = move.strip().upper()
+    if normalized == "PASS":
+        return "PASS"
+    return normalized

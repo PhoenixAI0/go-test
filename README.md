@@ -34,13 +34,14 @@ for SFT and GRPO using KataGo-based rewards. Dataset parsing is handled by the G
 ./scripts/train_grpo.sh --smoke
 ```
 
-5. Run the full pipeline (default includes 9x9 GRPO -> promotion gate -> 19x19 GRPO):
+5. Run the full pipeline (default includes 9x9 GRPO -> promotion gate -> 19x19 GRPO -> 19x19 full-game GRPO when the second gate passes):
 ```bash
 ./scripts/run_full_pipeline.sh \
   --model-command-template "python /path/to/your_gtp_engine.py --model {MODEL_DIR}"
 ```
 
 To skip all evaluation and promotion-gate checks, pass `--no-eval`.
+To skip the full-game stage only, pass `--skip-fullgame`.
 
 6. Run the full pipeline with automatic Hub publish:
 ```bash
@@ -111,6 +112,7 @@ Shell wrappers (recommended):
 ```bash
 ./scripts/train_sft.sh --board-size 9x9
 ./scripts/train_grpo.sh --board-size 9x9
+./scripts/train_grpo_fullgame.sh --smoke --fullgame-smoke-plies 20
 ```
 
 Common flags:
@@ -127,7 +129,17 @@ python scripts/run_sft.py --config config/sft_warm_start.yaml
 python scripts/run_sft.py --config config/sft_warm_start_19x19.yaml
 python scripts/run_grpo.py --config config/grpo_9x9.yaml
 python scripts/run_grpo.py --config config/grpo_19x19.yaml
+python scripts/run_grpo_fullgame.py --config config/grpo_fullgame_19x19.yaml
 ```
+
+### Four-stage curriculum
+1. SFT warm start on SGF data.
+2. GRPO 9x9 (move-level reward shaping).
+3. GRPO 19x19 curriculum stage.
+4. Full-game GRPO 19x19 vs KataGo (interactive rollouts, margin + terminal outcome reward).
+
+The full-game stage is gated by `promotion_gate_fullgame` in `config/grpo_19x19.yaml`.
+Default gate: winrate >= 0.55 over 200 evaluation games.
 
 Multi-GPU helpers:
 ```bash
@@ -184,6 +196,7 @@ pytest -m katago
 ## Outputs and Logs
 
 - Model outputs are stored under `outputs/`.
+  - Includes `outputs/grpo_fullgame_19x19/` when step-4 full-game training runs.
 - Run logs are stored under `logs/`.
 - Datasets are written to `data/`.
 

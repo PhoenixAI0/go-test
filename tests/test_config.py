@@ -4,6 +4,7 @@ from unittest.mock import mock_open, patch
 import pytest
 
 from go_rl.config import (
+    FullGameConfig,
     KataGoConfig,
     RewardConfig,
     RolloutConfig,
@@ -131,6 +132,9 @@ def test_reward_config_defaults():
     assert config.illegal_penalty == -1.0
     assert config.length_penalty == -0.05
     assert config.full_game_bonus == 0.5
+    assert config.scorelead_scale == 0.02
+    assert config.terminal_outcome_bonus == 1.0
+    assert config.illegal_move_ends_game is True
     assert config.strict_legality is False
 
 
@@ -141,6 +145,9 @@ def test_reward_config_custom_values():
         illegal_penalty=-2.0,
         length_penalty=-0.1,
         full_game_bonus=1.0,
+        scorelead_scale=0.03,
+        terminal_outcome_bonus=1.5,
+        illegal_move_ends_game=False,
         strict_legality=True,
     )
     assert config.winrate_scale == 2.0
@@ -148,7 +155,37 @@ def test_reward_config_custom_values():
     assert config.illegal_penalty == -2.0
     assert config.length_penalty == -0.1
     assert config.full_game_bonus == 1.0
+    assert config.scorelead_scale == 0.03
+    assert config.terminal_outcome_bonus == 1.5
+    assert config.illegal_move_ends_game is False
     assert config.strict_legality is True
+
+
+def test_fullgame_config_defaults():
+    config = FullGameConfig()
+    assert config.enabled is True
+    assert config.max_plies == 300
+    assert config.termination_two_passes is True
+    assert config.opponent_policy == "katago_best"
+    assert config.model_color_mode == "alternate"
+    assert config.seed_empty_board_prob == 0.4
+    assert config.max_seed_prefix_moves == 40
+    assert config.max_model_turns == 150
+
+
+def test_fullgame_config_validation():
+    with pytest.raises(ValueError, match="seed_empty_board_prob"):
+        FullGameConfig(seed_empty_board_prob=-0.1)
+    with pytest.raises(ValueError, match="max_plies"):
+        FullGameConfig(max_plies=0)
+    with pytest.raises(ValueError, match="max_seed_prefix_moves"):
+        FullGameConfig(max_seed_prefix_moves=-1)
+    with pytest.raises(ValueError, match="max_model_turns"):
+        FullGameConfig(max_model_turns=0)
+    with pytest.raises(ValueError, match="opponent_policy"):
+        FullGameConfig(opponent_policy="random")
+    with pytest.raises(ValueError, match="model_color_mode"):
+        FullGameConfig(model_color_mode="green")
 
 
 def test_training_config_validates_quantization_bits():
@@ -409,3 +446,21 @@ stop_at_pass: false
     assert config.num_samples == 16
     assert config.temperature == 0.8
     assert config.stop_at_pass is False
+
+
+def test_load_config_fullgame(tmp_path):
+    """Test loading FullGameConfig from YAML."""
+    yaml_content = """
+enabled: true
+max_plies: 120
+model_color_mode: alternate
+seed_empty_board_prob: 0.25
+"""
+    yaml_file = tmp_path / "fullgame.yaml"
+    yaml_file.write_text(yaml_content)
+
+    config = load_config(str(yaml_file), FullGameConfig)
+    assert isinstance(config, FullGameConfig)
+    assert config.enabled is True
+    assert config.max_plies == 120
+    assert config.seed_empty_board_prob == 0.25

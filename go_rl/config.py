@@ -42,12 +42,41 @@ class RolloutConfig:
 
 
 @dataclass
+class FullGameConfig:
+    enabled: bool = True
+    max_plies: int = 300
+    termination_two_passes: bool = True
+    opponent_policy: str = "katago_best"
+    model_color_mode: str = "alternate"
+    seed_empty_board_prob: float = 0.4
+    max_seed_prefix_moves: int = 40
+    max_model_turns: int = 150
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.seed_empty_board_prob <= 1.0:
+            raise ValueError("seed_empty_board_prob must be in [0.0, 1.0].")
+        if self.max_plies < 1:
+            raise ValueError("max_plies must be >= 1.")
+        if self.max_seed_prefix_moves < 0:
+            raise ValueError("max_seed_prefix_moves must be >= 0.")
+        if self.max_model_turns < 1:
+            raise ValueError("max_model_turns must be >= 1.")
+        if self.opponent_policy not in {"katago_best"}:
+            raise ValueError("opponent_policy must be 'katago_best'.")
+        if self.model_color_mode not in {"alternate", "black", "white"}:
+            raise ValueError("model_color_mode must be alternate, black, or white.")
+
+
+@dataclass
 class RewardConfig:
     winrate_scale: float = 1.0
     legal_bonus: float = 0.2
     illegal_penalty: float = -1.0
     length_penalty: float = -0.05
     full_game_bonus: float = 0.5
+    scorelead_scale: float = 0.02
+    terminal_outcome_bonus: float = 1.0
+    illegal_move_ends_game: bool = True
     strict_legality: bool = False
     # Legality checking level: "basic", "ko", or "superko"
     # If not specified, uses strict_legality flag for backward compatibility
