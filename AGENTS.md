@@ -10,7 +10,7 @@
 - `logs/` stores run logs.
 - `tests/` is the pytest suite.
 - `PLAN/` tracks work-in-progress notes.
-- `test.py` is a scratch file, not a test suite.
+- `scripts/scratch/test.py` is a scratch file, not a test suite.
 
 ## Build, Test, and Development Commands
 This repo is Python-first for training/inference code. SGF dataset parsing relies on the Go SGF parser (`go_parser/sgf_parser`); scripts will install Go and compile the parser when needed.
