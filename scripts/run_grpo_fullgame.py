@@ -4,9 +4,10 @@ import argparse
 import logging
 import os
 import random
+from collections import OrderedDict
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, Iterable, List, Optional, Protocol
 
 from go_rl.board import BoardState
 from go_rl.config import (
@@ -21,7 +22,8 @@ from go_rl.fullgame_rollout import (
     choose_model_color,
     simulate_full_game,
 )
-from go_rl.katago import KataGoAnalysisClient
+from go_rl.katago import KataGoResult
+from go_rl.katago_pool import build_katago_service
 from go_rl.logging_utils import setup_logging
 from go_rl.prompting import parse_prompt
 from go_rl.run_logging import write_run_log
@@ -40,6 +42,14 @@ from go_rl.wandb_utils import (
 from venv_utils import ensure_virtualenv
 
 logger = logging.getLogger(__name__)
+
+
+class _KataGoService(Protocol):
+    def start(self) -> None: ...
+    def close(self) -> None: ...
+    def analyze_position(self, board: BoardState) -> KataGoResult: ...
+    def analyze_positions(self, boards: Iterable[BoardState]) -> List[KataGoResult]: ...
+    def choose_move(self, board: BoardState, player: str | None = None) -> str: ...
 
 
 def load_yaml(path: str) -> Dict[str, object]:
@@ -73,7 +83,7 @@ def _build_seed_board(prompt: str, full_cfg: FullGameConfig, rng: random.Random)
 def build_fullgame_reward_fn(
     model: object,
     tokenizer: object,
-    katago: KataGoAnalysisClient,
+    katago: _KataGoService,
     reward_cfg: RewardConfig,
     rollout_cfg: RolloutConfig,
     full_cfg: FullGameConfig,
@@ -86,6 +96,8 @@ def build_fullgame_reward_fn(
         "fallback_passes": 0,
     }
     rng = random.Random(seed)
+    analysis_cache: OrderedDict[tuple, KataGoResult] = OrderedDict()
+    analysis_cache_max_size = 4096
 
     def reward_fn(prompts: List[str], completions: List[str], **_: object) -> List[float]:
         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -129,6 +141,8 @@ def build_fullgame_reward_fn(
                     rollout_cfg=rollout_cfg,
                     fullgame_cfg=full_cfg,
                     model_color=model_color,
+                    analysis_cache=analysis_cache,
+                    max_cache_size=analysis_cache_max_size,
                 )
                 rewards.append(float(result.total_reward))
                 if result.truncated:
@@ -383,12 +397,14 @@ def main() -> None:
     if world_size > 1:
         logger.info("Multi-GPU training detected: rank %d of %d", local_rank, world_size)
 
-    katago = None
+    katago: Optional[_KataGoService] = None
     try:
         if is_main_process:
-            katago = KataGoAnalysisClient(katago_cfg)
+            katago = build_katago_service(katago_cfg)
             logger.info("Starting KataGo on main process (rank %d/%d)", local_rank, world_size)
             katago.start()
+            if katago_cfg.katago_pool_size > 1:
+                logger.info("KataGo worker pool enabled with %d workers", katago_cfg.katago_pool_size)
             logger.info("KataGo client initialized successfully on rank 0")
         else:
             logger.info("Skipping KataGo on worker process (rank %d/%d)", local_rank, world_size)

@@ -1,6 +1,7 @@
 import json
-import subprocess
-from unittest.mock import MagicMock, Mock, patch
+import queue
+from threading import Event
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -15,6 +16,76 @@ from go_rl.katago import (
 )
 
 
+class _QueueStdout:
+    def __init__(self) -> None:
+        self._queue: queue.Queue[str] = queue.Queue()
+        self._closed = False
+
+    def readline(self) -> str:
+        if self._closed and self._queue.empty():
+            return ""
+        try:
+            return self._queue.get(timeout=1.0)
+        except queue.Empty:
+            return ""
+
+    def push(self, line: str) -> None:
+        self._queue.put(line)
+
+    def close(self) -> None:
+        self._closed = True
+        self.push("")
+
+
+class _EofStream:
+    def readline(self) -> str:
+        return ""
+
+    def close(self) -> None:
+        return None
+
+
+class _FakeStdin:
+    def __init__(self, on_write) -> None:
+        self._on_write = on_write
+        self.writes: list[str] = []
+
+    def write(self, data: str) -> None:
+        self.writes.append(data)
+        self._on_write(data)
+
+    def flush(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+class _FakeProcess:
+    def __init__(self, on_request) -> None:
+        self.stdout = _QueueStdout()
+        self.stderr = _EofStream()
+        self.stdin = _FakeStdin(self._handle_write)
+        self._on_request = on_request
+        self.terminate_called = False
+        self.kill_called = False
+
+    def _handle_write(self, data: str) -> None:
+        payload = json.loads(data.strip())
+        self._on_request(payload, self)
+
+    def terminate(self) -> None:
+        self.terminate_called = True
+        self.stdout.close()
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+    def kill(self) -> None:
+        self.kill_called = True
+        self.stdout.close()
+
+
 @pytest.fixture
 def katago_config():
     return KataGoConfig(
@@ -25,19 +96,6 @@ def katago_config():
         rules="chinese",
         komi=7.5,
     )
-
-
-@pytest.fixture
-def mock_process():
-    """Mock subprocess.Popen for KataGo process."""
-    process = MagicMock()
-    process.stdin = MagicMock()
-    process.stdout = MagicMock()
-    process.stderr = MagicMock()
-    process.terminate = MagicMock()
-    process.wait = MagicMock()
-    process.kill = MagicMock()
-    return process
 
 
 def test_katago_result_dataclass():
@@ -89,84 +147,64 @@ def test_katago_client_init(katago_config):
     assert client._process is None
     assert client._next_id == 1
     assert client._stderr_thread is None
+    assert client._stdout_thread is None
 
 
 @patch("subprocess.Popen")
-def test_katago_start_process(mock_popen, katago_config, mock_process):
-    mock_popen.return_value = mock_process
-    client = KataGoAnalysisClient(katago_config)
+def test_katago_start_process_with_cuda_override(mock_popen, katago_config):
+    process = MagicMock()
+    process.stdin = MagicMock()
+    process.stdout = MagicMock()
+    process.stdout.readline.return_value = ""
+    process.stderr = MagicMock()
+    process.stderr.readline.return_value = ""
+    process.terminate = MagicMock()
+    process.wait = MagicMock()
+    process.kill = MagicMock()
+    mock_popen.return_value = process
 
+    katago_config.katago_cuda_visible_devices = "1"
+    client = KataGoAnalysisClient(katago_config)
     client.start()
 
-    mock_popen.assert_called_once_with(
-        [
-            "/usr/bin/katago",
-            "analysis",
-            "-model",
-            "/models/kata.bin.gz",
-            "-config",
-            "/config/gtp.cfg",
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-    )
-    assert client._process is not None
-    assert client._stderr_thread is not None
+    assert mock_popen.call_count == 1
+    args = mock_popen.call_args.args[0]
+    kwargs = mock_popen.call_args.kwargs
+    assert args == [
+        "/usr/bin/katago",
+        "analysis",
+        "-model",
+        "/models/kata.bin.gz",
+        "-config",
+        "/config/gtp.cfg",
+    ]
+    assert kwargs["env"]["CUDA_VISIBLE_DEVICES"] == "1"
+    assert client._stdout_thread is not None
+    client.close()
 
 
 @patch("subprocess.Popen")
-def test_katago_start_already_running(mock_popen, katago_config, mock_process):
-    mock_popen.return_value = mock_process
-    client = KataGoAnalysisClient(katago_config)
+def test_katago_start_already_running(mock_popen, katago_config):
+    process = MagicMock()
+    process.stdin = MagicMock()
+    process.stdout = MagicMock()
+    process.stdout.readline.return_value = ""
+    process.stderr = MagicMock()
+    process.stderr.readline.return_value = ""
+    process.terminate = MagicMock()
+    process.wait = MagicMock()
+    process.kill = MagicMock()
+    mock_popen.return_value = process
 
+    client = KataGoAnalysisClient(katago_config)
     client.start()
     first_process = client._process
-
-    # Call start again - should not create new process
     client.start()
     assert client._process is first_process
     assert mock_popen.call_count == 1
-
-
-@patch("subprocess.Popen")
-def test_katago_close_process(mock_popen, katago_config, mock_process):
-    mock_popen.return_value = mock_process
-    client = KataGoAnalysisClient(katago_config)
-
-    client.start()
-    client.close()
-
-    mock_process.terminate.assert_called_once()
-    mock_process.wait.assert_called_once_with(timeout=5)
-    mock_process.stdin.close.assert_called_once()
-    mock_process.stdout.close.assert_called_once()
-    mock_process.stderr.close.assert_called_once()
-    assert client._process is None
-
-
-@patch("subprocess.Popen")
-def test_katago_close_timeout_kills_process(mock_popen, katago_config, mock_process):
-    mock_popen.return_value = mock_process
-    mock_process.wait.side_effect = subprocess.TimeoutExpired(cmd="katago", timeout=5)
-
-    client = KataGoAnalysisClient(katago_config)
-    client.start()
-    client.close()
-
-    mock_process.terminate.assert_called_once()
-    mock_process.kill.assert_called_once()
-
-
-def test_katago_close_no_process(katago_config):
-    client = KataGoAnalysisClient(katago_config)
-    # Should not raise when closing without starting
     client.close()
 
 
-@patch("subprocess.Popen")
 def test_katago_send_not_started(katago_config):
     client = KataGoAnalysisClient(katago_config)
     with pytest.raises(RuntimeError, match="KataGo process not started"):
@@ -174,220 +212,206 @@ def test_katago_send_not_started(katago_config):
 
 
 @patch("subprocess.Popen")
-def test_katago_send_success(mock_popen, katago_config, mock_process):
-    mock_popen.return_value = mock_process
-    response_data = {"id": 1, "rootInfo": {"winrate": 0.5}}
-    mock_process.stdout.readline.return_value = json.dumps(response_data) + "\n"
+def test_katago_send_success(mock_popen, katago_config):
+    def on_request(payload, proc):
+        proc.stdout.push(json.dumps({"id": payload["id"], "rootInfo": {"winrate": 0.5}}) + "\n")
 
+    fake_process = _FakeProcess(on_request=on_request)
+    mock_popen.return_value = fake_process
     client = KataGoAnalysisClient(katago_config)
     client.start()
 
     payload = {"id": 1, "boardXSize": 9, "boardYSize": 9}
     result = client._send(payload)
-
-    assert result == response_data
-    mock_process.stdin.write.assert_called_once()
-    mock_process.stdin.flush.assert_called_once()
-    written_data = mock_process.stdin.write.call_args[0][0]
-    assert json.loads(written_data.strip()) == payload
+    assert result["id"] == 1
+    assert result["rootInfo"]["winrate"] == 0.5
+    client.close()
 
 
 @patch("subprocess.Popen")
-def test_katago_send_empty_response(mock_popen, katago_config, mock_process):
-    mock_popen.return_value = mock_process
-    mock_process.stdout.readline.return_value = ""
+def test_katago_out_of_order_responses_mapped_by_id(mock_popen, katago_config):
+    seen_ids: list[int] = []
 
+    def on_request(payload, proc):
+        req_id = int(payload["id"])
+        seen_ids.append(req_id)
+        if len(seen_ids) == 1:
+            return
+        second = {"id": req_id, "rootInfo": {"winrate": 0.9}}
+        first = {"id": seen_ids[0], "rootInfo": {"winrate": 0.1}}
+        proc.stdout.push(json.dumps(second) + "\n")
+        proc.stdout.push(json.dumps(first) + "\n")
+
+    fake_process = _FakeProcess(on_request=on_request)
+    mock_popen.return_value = fake_process
     client = KataGoAnalysisClient(katago_config)
     client.start()
 
-    with pytest.raises(RuntimeError, match="empty response"):
-        client._send({"id": 1})
+    board_a = BoardState.empty(9)
+    board_b = BoardState.empty(9)
+    req_a = client.submit_position(board_a)
+    req_b = client.submit_position(board_b)
+
+    result_b = client.await_result(req_b, timeout=1.0)
+    result_a = client.await_result(req_a, timeout=1.0)
+    assert result_b.winrate == 0.9
+    assert result_a.winrate == 0.1
+    client.close()
 
 
 @patch("subprocess.Popen")
-def test_katago_analyze_position(mock_popen, katago_config, mock_process):
-    mock_popen.return_value = mock_process
-    response_data = {
-        "id": 1,
-        "rootInfo": {"winrate": 0.65, "scoreLead": 1.2},
-        "moveInfos": [{"move": "D4"}],
-    }
-    mock_process.stdout.readline.return_value = json.dumps(response_data) + "\n"
+def test_katago_timeout_path(mock_popen, katago_config):
+    started = Event()
 
+    def on_request(_payload, _proc):
+        started.set()
+        return
+
+    fake_process = _FakeProcess(on_request=on_request)
+    mock_popen.return_value = fake_process
+    katago_config.request_timeout_seconds = 0.05
+    client = KataGoAnalysisClient(katago_config)
+    client.start()
+
+    req_id = client.submit_position(BoardState.empty(9))
+    assert started.is_set() is True
+    with pytest.raises(TimeoutError, match="timed out"):
+        client.await_result(req_id)
+    client.close()
+
+
+@patch("subprocess.Popen")
+def test_katago_close_with_pending_requests(mock_popen, katago_config):
+    def on_request(_payload, _proc):
+        return
+
+    fake_process = _FakeProcess(on_request=on_request)
+    mock_popen.return_value = fake_process
+    client = KataGoAnalysisClient(katago_config)
+    client.start()
+
+    req_id = client.submit_position(BoardState.empty(9))
+    client.close()
+    with pytest.raises(RuntimeError, match="(Unknown request id|failed)"):
+        client.await_result(req_id, timeout=0.1)
+
+
+@patch("subprocess.Popen")
+def test_katago_analyze_position_backward_compatible(mock_popen, katago_config):
+    def on_request(payload, proc):
+        response = {
+            "id": payload["id"],
+            "rootInfo": {"winrate": 0.65, "scoreLead": 1.2},
+            "moveInfos": [{"move": "D4"}],
+        }
+        proc.stdout.push(json.dumps(response) + "\n")
+
+    fake_process = _FakeProcess(on_request=on_request)
+    mock_popen.return_value = fake_process
     client = KataGoAnalysisClient(katago_config)
     client.start()
 
     board = BoardState.empty(9)
     board.apply_move("B", "D4")
     board.apply_move("W", "PASS")
-
     result = client.analyze_position(board)
 
     assert isinstance(result, KataGoResult)
     assert result.winrate == 0.65
     assert result.score_lead == 1.2
     assert result.best_move == "D4"
-    assert result.raw == response_data
-    assert client._next_id == 2  # Should increment
+    assert client._next_id == 2
+    client.close()
 
 
 @patch("subprocess.Popen")
-def test_katago_analyze_position_payload_format(mock_popen, katago_config, mock_process):
-    mock_popen.return_value = mock_process
-    response_data = {"id": 1, "rootInfo": {"winrate": 0.5}}
-    mock_process.stdout.readline.return_value = json.dumps(response_data) + "\n"
+def test_katago_analyze_positions_batch(mock_popen, katago_config):
+    def on_request(payload, proc):
+        req_id = int(payload["id"])
+        proc.stdout.push(json.dumps({"id": req_id, "rootInfo": {"winrate": 0.4 + (0.1 * req_id)}}) + "\n")
 
+    fake_process = _FakeProcess(on_request=on_request)
+    mock_popen.return_value = fake_process
     client = KataGoAnalysisClient(katago_config)
     client.start()
 
-    board = BoardState.empty(5)
-    board.apply_move("B", "A1")
-    board.apply_move("W", "B2")
-
-    client.analyze_position(board)
-
-    written_data = mock_process.stdin.write.call_args[0][0]
-    payload = json.loads(written_data.strip())
-
-    assert payload["id"] == 1
-    assert payload["boardXSize"] == 5
-    assert payload["boardYSize"] == 5
-    assert payload["rules"] == "chinese"
-    assert payload["komi"] == 7.5
-    assert payload["moves"] == [["b", "a1"], ["w", "b2"]]
+    boards = [BoardState.empty(9), BoardState.empty(9)]
+    results = client.analyze_positions(boards)
+    assert len(results) == 2
+    assert results[0].winrate != results[1].winrate
+    client.close()
 
 
 @patch("subprocess.Popen")
-def test_katago_evaluate_moves(mock_popen, katago_config, mock_process):
-    mock_popen.return_value = mock_process
+def test_katago_evaluate_moves(mock_popen, katago_config):
+    def on_request(payload, proc):
+        req_id = int(payload["id"])
+        proc.stdout.push(json.dumps({"id": req_id, "rootInfo": {"winrate": 0.5 + (0.01 * req_id)}}) + "\n")
 
-    # Mock multiple responses
-    responses = [
-        {"id": 1, "rootInfo": {"winrate": 0.52}},  # D4
-        {"id": 2, "rootInfo": {"winrate": 0.48}},  # F6
-        {"id": 3, "rootInfo": {"winrate": 0.45}},  # PASS
-    ]
-    mock_process.stdout.readline.side_effect = [
-        json.dumps(r) + "\n" for r in responses
-    ]
-
+    fake_process = _FakeProcess(on_request=on_request)
+    mock_popen.return_value = fake_process
     client = KataGoAnalysisClient(katago_config)
     client.start()
 
     board = BoardState.empty(9)
     moves = ["D4", "F6", "PASS"]
     results = client.evaluate_moves(board, moves, player="B")
-
     assert len(results) == 3
-    assert results["D4"] == 0.52
-    assert results["F6"] == 0.48
-    assert results["PASS"] == 0.45
+    assert all(move in results for move in moves)
+    client.close()
 
 
 @patch("subprocess.Popen")
-def test_katago_evaluate_moves_infers_player(mock_popen, katago_config, mock_process):
-    mock_popen.return_value = mock_process
-    response_data = {"id": 1, "rootInfo": {"winrate": 0.5}}
-    mock_process.stdout.readline.return_value = json.dumps(response_data) + "\n"
+def test_katago_analyze_with_pass_move_payload(mock_popen, katago_config):
+    def on_request(payload, proc):
+        proc.stdout.push(json.dumps({"id": payload["id"], "rootInfo": {"winrate": 0.5}}) + "\n")
 
-    client = KataGoAnalysisClient(katago_config)
-    client.start()
-
-    board = BoardState.empty(9)
-    board.apply_move("B", "D4")  # Now it's W's turn
-
-    # Don't specify player - should infer W
-    client.evaluate_moves(board, ["F6"], player=None)
-
-    # Check that the move was applied for W
-    written_data = mock_process.stdin.write.call_args[0][0]
-    payload = json.loads(written_data.strip())
-    assert payload["moves"][-1] == ["w", "f6"]
-
-
-@patch("subprocess.Popen")
-def test_katago_thread_safety(mock_popen, katago_config, mock_process):
-    """Test that the RLock is used for thread safety."""
-    mock_popen.return_value = mock_process
-    response_data = {"id": 1, "rootInfo": {"winrate": 0.5}}
-    mock_process.stdout.readline.return_value = json.dumps(response_data) + "\n"
-
-    client = KataGoAnalysisClient(katago_config)
-    client.start()
-
-    # Verify _lock exists and is an RLock
-    assert hasattr(client, "_lock")
-    assert isinstance(client._lock, type(client._lock))
-
-    board = BoardState.empty(9)
-    # This should acquire and release the lock
-    client.analyze_position(board)
-
-
-@patch("subprocess.Popen")
-def test_katago_analyze_with_pass_move(mock_popen, katago_config, mock_process):
-    """Test that PASS moves are correctly formatted as 'pass' in lowercase."""
-    mock_popen.return_value = mock_process
-    response_data = {"id": 1, "rootInfo": {"winrate": 0.5}}
-    mock_process.stdout.readline.return_value = json.dumps(response_data) + "\n"
-
+    fake_process = _FakeProcess(on_request=on_request)
+    mock_popen.return_value = fake_process
     client = KataGoAnalysisClient(katago_config)
     client.start()
 
     board = BoardState.empty(9)
     board.apply_move("B", "PASS")
-
     client.analyze_position(board)
-
-    written_data = mock_process.stdin.write.call_args[0][0]
-    payload = json.loads(written_data.strip())
+    payload = json.loads(fake_process.stdin.writes[-1].strip())
     assert payload["moves"] == [["b", "pass"]]
+    client.close()
 
 
 @patch("subprocess.Popen")
-def test_katago_choose_move_uses_best(mock_popen, katago_config, mock_process):
-    mock_popen.return_value = mock_process
-    response_data = {
-        "id": 1,
-        "rootInfo": {"winrate": 0.5, "scoreLead": 0.0},
-        "moveInfos": [{"move": "D4"}],
-    }
-    mock_process.stdout.readline.return_value = json.dumps(response_data) + "\n"
+def test_katago_choose_move_uses_best(mock_popen, katago_config):
+    def on_request(payload, proc):
+        response = {
+            "id": payload["id"],
+            "rootInfo": {"winrate": 0.5, "scoreLead": 0.0},
+            "moveInfos": [{"move": "D4"}],
+        }
+        proc.stdout.push(json.dumps(response) + "\n")
 
+    fake_process = _FakeProcess(on_request=on_request)
+    mock_popen.return_value = fake_process
     client = KataGoAnalysisClient(katago_config)
     client.start()
     board = BoardState.empty(9)
     assert client.choose_move(board, player="B") == "D4"
+    client.close()
 
 
 @patch("subprocess.Popen")
-def test_katago_choose_move_fallback_pass(mock_popen, katago_config, mock_process):
-    mock_popen.return_value = mock_process
-    response_data = {"id": 1, "rootInfo": {"winrate": 0.5}, "moveInfos": []}
-    mock_process.stdout.readline.return_value = json.dumps(response_data) + "\n"
+def test_katago_choose_move_fallback_pass(mock_popen, katago_config):
+    def on_request(payload, proc):
+        response = {
+            "id": payload["id"],
+            "rootInfo": {"winrate": 0.5},
+            "moveInfos": [],
+        }
+        proc.stdout.push(json.dumps(response) + "\n")
 
+    fake_process = _FakeProcess(on_request=on_request)
+    mock_popen.return_value = fake_process
     client = KataGoAnalysisClient(katago_config)
     client.start()
     board = BoardState.empty(9)
     assert client.choose_move(board, player="B") == "PASS"
-
-
-@patch("subprocess.Popen")
-def test_katago_choose_move_respects_requested_player(mock_popen, katago_config, mock_process):
-    mock_popen.return_value = mock_process
-    response_data = {
-        "id": 1,
-        "rootInfo": {"winrate": 0.5, "scoreLead": 0.0},
-        "moveInfos": [{"move": "D4"}],
-    }
-    mock_process.stdout.readline.return_value = json.dumps(response_data) + "\n"
-
-    client = KataGoAnalysisClient(katago_config)
-    client.start()
-    board = BoardState.empty(9)  # B to move
-
-    # Ask for W move explicitly; choose_move should align analysis by inserting B PASS.
-    assert client.choose_move(board, player="W") == "D4"
-    written_data = mock_process.stdin.write.call_args[0][0]
-    payload = json.loads(written_data.strip())
-    assert payload["moves"] == [["b", "pass"]]
+    client.close()

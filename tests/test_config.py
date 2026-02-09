@@ -75,10 +75,33 @@ def test_katago_config_custom_values():
         board_size=19,
         rules="japanese",
         komi=6.5,
+        katago_cuda_visible_devices="1",
+        request_timeout_seconds=12.0,
+        katago_pool_size=2,
     )
     assert config.board_size == 19
     assert config.rules == "japanese"
     assert config.komi == 6.5
+    assert config.katago_cuda_visible_devices == "1"
+    assert config.request_timeout_seconds == 12.0
+    assert config.katago_pool_size == 2
+
+
+def test_katago_config_rejects_invalid_runtime_controls():
+    with pytest.raises(ValueError, match="request_timeout_seconds"):
+        KataGoConfig(
+            binary_path="/usr/bin/katago",
+            model_path="/models/kata.bin.gz",
+            config_path="/config/gtp.cfg",
+            request_timeout_seconds=0,
+        )
+    with pytest.raises(ValueError, match="katago_pool_size"):
+        KataGoConfig(
+            binary_path="/usr/bin/katago",
+            model_path="/models/kata.bin.gz",
+            config_path="/config/gtp.cfg",
+            katago_pool_size=0,
+        )
 
 
 def test_katago_config_rejects_placeholder():

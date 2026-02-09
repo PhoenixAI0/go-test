@@ -95,10 +95,27 @@ if [ ! -d "$KATAGO_DIR" ]; then
     # Download a neural network model (b18c384nbt is good for 9x9 and 19x19)
     echo "Downloading KataGo neural network model..."
     wget -q https://media.katagotraining.org/uploaded/networks/models/kata1/kata1-b18c384nbt-s7709731328-d3715293823.bin.gz
-    
-    # Create analysis config
-    cat > analysis.cfg << 'EOF'
-# KataGo Analysis Config
+
+    cd -
+    echo -e "${GREEN}✓ KataGo installed to ${KATAGO_DIR}${NC}"
+else
+    echo -e "${GREEN}✓ KataGo already installed at ${KATAGO_DIR}${NC}"
+fi
+
+# Create split analysis configs for train/eval workloads.
+cat > "${KATAGO_DIR}/analysis_train.cfg" << 'EOF'
+# Fast training-time KataGo analysis config
+numSearchThreads = 4
+nnCacheSizePowerOfTwo = 21
+nnMutexPoolSizePowerOfTwo = 16
+numNNServerThreadsPerModel = 2
+nnMaxBatchSize = 16
+maxVisits = 25
+maxPlayouts = 80
+EOF
+
+cat > "${KATAGO_DIR}/analysis_eval.cfg" << 'EOF'
+# Higher-quality evaluation KataGo analysis config
 numSearchThreads = 8
 nnCacheSizePowerOfTwo = 21
 nnMutexPoolSizePowerOfTwo = 16
@@ -107,19 +124,18 @@ nnMaxBatchSize = 16
 maxVisits = 100
 maxPlayouts = 300
 EOF
-    
-    cd -
-    echo -e "${GREEN}✓ KataGo installed to ${KATAGO_DIR}${NC}"
-else
-    echo -e "${GREEN}✓ KataGo already installed at ${KATAGO_DIR}${NC}"
-fi
+
+# Backward-compatible alias expected by older scripts.
+cp "${KATAGO_DIR}/analysis_eval.cfg" "${KATAGO_DIR}/analysis.cfg"
 
 # Create .env file for KataGo paths
 cat > .env << EOF
 # KataGo Configuration
 export KATAGO_BIN="${KATAGO_DIR}/katago"
 export KATAGO_MODEL="${KATAGO_DIR}/kata1-b18c384nbt-s7709731328-d3715293823.bin.gz"
-export KATAGO_CONFIG="${KATAGO_DIR}/analysis.cfg"
+export KATAGO_TRAIN_CONFIG="${KATAGO_DIR}/analysis_train.cfg"
+export KATAGO_EVAL_CONFIG="${KATAGO_DIR}/analysis_eval.cfg"
+export KATAGO_CONFIG="\${KATAGO_EVAL_CONFIG}"
 EOF
 
 echo -e "${GREEN}✓ Environment variables written to .env${NC}"

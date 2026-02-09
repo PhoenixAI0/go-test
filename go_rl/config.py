@@ -22,6 +22,9 @@ class KataGoConfig:
     board_size: int = 9
     rules: str = "chinese"
     komi: float = 7.5
+    katago_cuda_visible_devices: Optional[str] = None
+    request_timeout_seconds: Optional[float] = 30.0
+    katago_pool_size: int = 1
 
     def __post_init__(self) -> None:
         self.binary_path = _expand_path(self.binary_path)
@@ -30,6 +33,10 @@ class KataGoConfig:
         _validate_path(self.binary_path, "KataGo binary_path")
         _validate_path(self.model_path, "KataGo model_path")
         _validate_path(self.config_path, "KataGo config_path")
+        if self.request_timeout_seconds is not None and self.request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds must be > 0 when provided.")
+        if self.katago_pool_size < 1:
+            raise ValueError("katago_pool_size must be >= 1.")
 
 
 @dataclass

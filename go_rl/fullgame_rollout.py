@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import MutableMapping, Optional, Protocol
 
 from .board import BoardState
 from .config import FullGameConfig, RewardConfig, RolloutConfig
-from .katago import KataGoAnalysisClient
+from .katago import KataGoResult
 from .prompting import build_prompt, parse_move
 from .rewards import (
     is_legal_move,
@@ -18,6 +18,11 @@ from .rollout import normalize_move
 from .rules import LegalityLevel
 
 logger = logging.getLogger(__name__)
+
+
+class _KataGoService(Protocol):
+    def analyze_position(self, board: BoardState) -> KataGoResult: ...
+    def choose_move(self, board: BoardState, player: str | None = None) -> str: ...
 
 
 @dataclass
@@ -70,6 +75,12 @@ def align_board_to_player_turn(board: BoardState, player: str) -> BoardState:
         return aligned
     aligned.apply_move(to_move, "PASS", strict=True)
     return aligned
+
+
+def board_key(
+    board: BoardState,
+) -> tuple[int, tuple[tuple[str, Optional[tuple[int, int]]], ...]]:
+    return (board.size, tuple((player.upper(), coords) for player, coords in board.moves))
 
 
 def _parse_completion_to_move(completion: str, stop_at_pass: bool) -> str:
@@ -142,11 +153,13 @@ def simulate_full_game(
     initial_completion: str,
     model: object,
     tokenizer: object,
-    katago: KataGoAnalysisClient,
+    katago: _KataGoService,
     reward_cfg: RewardConfig,
     rollout_cfg: RolloutConfig,
     fullgame_cfg: FullGameConfig,
     model_color: str,
+    analysis_cache: Optional[MutableMapping[tuple, KataGoResult]] = None,
+    max_cache_size: Optional[int] = None,
 ) -> FullGameEpisodeResult:
     """Run one interactive game continuation and return a scalar reward breakdown."""
     model_color = model_color.upper()
@@ -167,6 +180,27 @@ def simulate_full_game(
     pass_terminated = False
     katago_fallback_passes = 0
 
+    def _analyze_position(current_board: BoardState) -> KataGoResult:
+        if analysis_cache is None:
+            return katago.analyze_position(current_board)
+        key = board_key(current_board)
+        cached = analysis_cache.get(key)
+        if cached is not None:
+            mover = getattr(analysis_cache, "move_to_end", None)
+            if callable(mover):
+                mover(key)
+            return cached
+        result = katago.analyze_position(current_board)
+        analysis_cache[key] = result
+        if max_cache_size is not None and max_cache_size > 0:
+            while len(analysis_cache) > max_cache_size:
+                if hasattr(analysis_cache, "popitem"):
+                    analysis_cache.popitem(last=False)  # type: ignore[call-arg]
+                else:  # pragma: no cover - defensive fallback for non-ordered mappings
+                    first_key = next(iter(analysis_cache))
+                    del analysis_cache[first_key]
+        return result
+
     def _record_pass(move_text: str) -> None:
         nonlocal consecutive_passes
         if move_text.upper() == "PASS":
@@ -185,7 +219,7 @@ def simulate_full_game(
         nonlocal plies_played
         nonlocal terminated_by_illegal
 
-        pre = katago.analyze_position(board)
+        pre = _analyze_position(board)
         pre_lead = scorelead_from_model_perspective(pre.score_lead, model_color)
         applied, legality, length, ended_illegal = _apply_move_or_penalize(
             board,
@@ -201,7 +235,7 @@ def simulate_full_game(
             return False
 
         if applied:
-            post = katago.analyze_position(board)
+            post = _analyze_position(board)
             post_lead = scorelead_from_model_perspective(post.score_lead, model_color)
             scorelead_delta_sum += post_lead - pre_lead
         _record_pass(move_text)
@@ -254,7 +288,7 @@ def simulate_full_game(
     if terminated_by_illegal:
         final_outcome = -1.0
     else:
-        final_position = katago.analyze_position(board)
+        final_position = _analyze_position(board)
         final_lead = scorelead_from_model_perspective(final_position.score_lead, model_color)
         if final_lead > 0:
             final_outcome = 1.0

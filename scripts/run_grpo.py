@@ -5,11 +5,12 @@ import logging
 import os
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, Iterable, List, Optional, Protocol
 
 from go_rl.board import BoardState, gtp_to_coords
 from go_rl.config import KataGoConfig, RewardConfig, RolloutConfig, TrainingConfig
-from go_rl.katago import KataGoAnalysisClient
+from go_rl.katago import KataGoResult
+from go_rl.katago_pool import build_katago_service
 from go_rl.logging_utils import setup_logging
 from go_rl.prompting import parse_prompt
 from go_rl.rewards import evaluate_move, is_legal_coords
@@ -32,6 +33,45 @@ from venv_utils import ensure_virtualenv
 logger = logging.getLogger(__name__)
 
 
+class _KataGoService(Protocol):
+    def start(self) -> None: ...
+    def close(self) -> None: ...
+    def analyze_position(self, board: BoardState) -> KataGoResult: ...
+    def analyze_positions(self, boards: Iterable[BoardState]) -> List[KataGoResult]: ...
+
+
+def board_key(
+    board: BoardState,
+) -> tuple[int, tuple[tuple[str, Optional[tuple[int, int]]], ...]]:
+    return (board.size, tuple((player.upper(), coords) for player, coords in board.moves))
+
+
+def _analyze_unique_positions(
+    katago: _KataGoService,
+    boards_by_key: Dict[object, BoardState],
+) -> Dict[object, KataGoResult]:
+    if not boards_by_key:
+        return {}
+    keys = list(boards_by_key.keys())
+    boards = [boards_by_key[key] for key in keys]
+    try:
+        analyses = katago.analyze_positions(boards)
+        if len(analyses) != len(keys):
+            raise RuntimeError(
+                f"KataGo returned {len(analyses)} results for {len(keys)} requests."
+            )
+        return {key: analysis for key, analysis in zip(keys, analyses)}
+    except Exception:
+        logger.debug(
+            "Batched KataGo analyze_positions failed; falling back to per-position calls.",
+            exc_info=True,
+        )
+        fallback: Dict[object, KataGoResult] = {}
+        for key, board in boards_by_key.items():
+            fallback[key] = katago.analyze_position(board)
+        return fallback
+
+
 def load_yaml(path: str) -> Dict[str, object]:
     try:
         import yaml
@@ -45,7 +85,7 @@ def load_yaml(path: str) -> Dict[str, object]:
 
 
 def build_reward_fn(
-    katago: KataGoAnalysisClient,
+    katago: _KataGoService,
     reward_cfg: RewardConfig,
     rollout_cfg: RolloutConfig,
 ) -> callable:
@@ -72,24 +112,42 @@ def build_reward_fn(
                 "Ensure KataGo client is started before creating the reward function."
             )
         rewards: List[float] = []
+        base_requests: Dict[object, BoardState] = {}
+        candidate_requests: Dict[object, BoardState] = {}
+        entries: List[Dict[str, object]] = []
+
         for prompt, completion in zip(prompts, completions):
-            board = parse_prompt(prompt)
+            try:
+                board = parse_prompt(prompt)
+            except Exception:
+                logger.debug("Failed to parse prompt for reward scoring", exc_info=True)
+                entries.append({"prompt_error": True})
+                continue
+
             player = board.next_player()
-            base_analysis = katago.analyze_position(board)
-            base_winrate = winrate_for_player(base_analysis.winrate, player, player)
+            key = board_key(board)
+            base_requests.setdefault(key, board)
+            entry: Dict[str, object] = {
+                "prompt_error": False,
+                "board": board,
+                "player": player,
+                "base_key": key,
+                "reward_move": completion,
+                "candidate_key": None,
+            }
+
             try:
                 move = normalize_move(completion, stop_at_pass=rollout_cfg.stop_at_pass)
+                entry["reward_move"] = move
             except Exception:
                 logger.debug(
                     "Failed to normalize completion: %r",
                     completion,
                     exc_info=True,
                 )
-                breakdown = evaluate_move(
-                    board, completion, 0.0, reward_cfg, player=player
-                )
-                rewards.append(breakdown.total)
+                entries.append(entry)
                 continue
+
             try:
                 coords = gtp_to_coords(move, board.size)
                 valid_coords = True
@@ -98,30 +156,62 @@ def build_reward_fn(
                 coords = None
                 valid_coords = False
             if not valid_coords:
-                breakdown = evaluate_move(board, move, 0.0, reward_cfg, player=player)
-                rewards.append(breakdown.total)
+                entries.append(entry)
                 continue
+
             is_legal = is_legal_coords(board, player, coords, reward_cfg)
             if not is_legal:
-                breakdown = evaluate_move(board, move, 0.0, reward_cfg, player=player)
-                rewards.append(breakdown.total)
+                entries.append(entry)
                 continue
+
             candidate = BoardState(size=board.size, moves=list(board.moves))
             try:
                 candidate.apply_move(player, move)
-                candidate_analysis = katago.analyze_position(candidate)
-                candidate_winrate = winrate_for_player(
-                    candidate_analysis.winrate,
-                    candidate.next_player(),
-                    player,
-                )
-                delta = candidate_winrate - base_winrate
-                breakdown = evaluate_move(board, move, delta, reward_cfg, player=player)
-                rewards.append(breakdown.total)
             except Exception:
                 logger.debug("Candidate analysis failed", exc_info=True)
+                entries.append(entry)
+                continue
+            cand_key = (key, move)
+            candidate_requests.setdefault(cand_key, candidate)
+            entry["candidate_key"] = cand_key
+            entries.append(entry)
+
+        base_cache = _analyze_unique_positions(katago, base_requests)
+        candidate_cache = _analyze_unique_positions(katago, candidate_requests)
+
+        for entry in entries:
+            if bool(entry.get("prompt_error")):
+                rewards.append(float(reward_cfg.illegal_penalty))
+                continue
+            board = entry["board"]
+            player = str(entry["player"])
+            move = str(entry["reward_move"])
+            base_key = entry["base_key"]
+            base_analysis = base_cache.get(base_key)
+            if base_analysis is None:
                 breakdown = evaluate_move(board, move, 0.0, reward_cfg, player=player)
                 rewards.append(breakdown.total)
+                continue
+
+            candidate_key = entry["candidate_key"]
+            candidate_analysis = (
+                candidate_cache.get(candidate_key) if candidate_key is not None else None
+            )
+            if candidate_analysis is None:
+                breakdown = evaluate_move(board, move, 0.0, reward_cfg, player=player)
+                rewards.append(breakdown.total)
+                continue
+
+            base_winrate = winrate_for_player(base_analysis.winrate, player, player)
+            next_to_move = "W" if player == "B" else "B"
+            candidate_winrate = winrate_for_player(
+                candidate_analysis.winrate,
+                next_to_move,
+                player,
+            )
+            delta = candidate_winrate - base_winrate
+            breakdown = evaluate_move(board, move, delta, reward_cfg, player=player)
+            rewards.append(breakdown.total)
         return rewards
 
     return reward_fn
@@ -327,14 +417,16 @@ def main() -> None:
             "Multi-GPU training detected: rank %d of %d", local_rank, world_size
         )
 
-    katago = None
+    katago: Optional[_KataGoService] = None
     try:
         if is_main_process:
-            katago = KataGoAnalysisClient(katago_cfg)
+            katago = build_katago_service(katago_cfg)
             logger.info(
                 "Starting KataGo on main process (rank %d/%d)", local_rank, world_size
             )
             katago.start()
+            if katago_cfg.katago_pool_size > 1:
+                logger.info("KataGo worker pool enabled with %d workers", katago_cfg.katago_pool_size)
             logger.info("KataGo client initialized successfully on rank 0")
         else:
             logger.info(
