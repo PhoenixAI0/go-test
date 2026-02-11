@@ -194,11 +194,16 @@ def simulate_full_game(
         analysis_cache[key] = result
         if max_cache_size is not None and max_cache_size > 0:
             while len(analysis_cache) > max_cache_size:
-                if hasattr(analysis_cache, "popitem"):
-                    analysis_cache.popitem(last=False)  # type: ignore[call-arg]
-                else:  # pragma: no cover - defensive fallback for non-ordered mappings
-                    first_key = next(iter(analysis_cache))
-                    del analysis_cache[first_key]
+                popitem = getattr(analysis_cache, "popitem", None)
+                if callable(popitem):
+                    try:
+                        popitem(last=False)  # OrderedDict API (FIFO eviction)
+                        continue
+                    except TypeError:
+                        pass
+                # Generic MutableMapping fallback.
+                first_key = next(iter(analysis_cache))
+                del analysis_cache[first_key]
         return result
 
     def _record_pass(move_text: str) -> None:

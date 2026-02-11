@@ -20,7 +20,7 @@ training:
 katago:
   binary_path: ${KATAGO_BIN}
   model_path: ${KATAGO_MODEL}
-  config_path: config/katago_analysis_train.cfg
+  config_path: katago_analysis_train.cfg
   board_size: 19
   rules: chinese
   komi: 7.5

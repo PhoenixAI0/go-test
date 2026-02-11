@@ -250,9 +250,10 @@ def main() -> None:
     setup_logging(args.log_level)
     logger.info("Loading full-game GRPO config from %s", args.config)
     cfg = load_yaml(args.config)
+    config_base_dir = str(Path(os.path.expandvars(os.path.expanduser(args.config))).resolve().parent)
 
     train_cfg = TrainingConfig(**cfg["training"])
-    katago_cfg = KataGoConfig(**cfg["katago"])
+    katago_cfg = KataGoConfig(config_base_dir=config_base_dir, **cfg["katago"])
     reward_cfg = RewardConfig(**cfg["reward"])
     rollout_cfg = RolloutConfig(**cfg["rollout"])
     full_cfg = FullGameConfig(**(cfg.get("full_game") or {}))

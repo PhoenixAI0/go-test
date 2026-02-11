@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 from typing import Any, Dict, Optional
 
 
-def _expand_path(value: str) -> str:
-    return os.path.expandvars(os.path.expanduser(value))
+def _expand_path(value: str, base_dir: Optional[str] = None) -> str:
+    expanded = os.path.expandvars(os.path.expanduser(value))
+    if base_dir and not os.path.isabs(expanded):
+        return os.path.abspath(os.path.join(base_dir, expanded))
+    return expanded
 
 
 def _validate_path(value: str, label: str) -> None:
@@ -19,6 +22,7 @@ class KataGoConfig:
     binary_path: str
     model_path: str
     config_path: str
+    config_base_dir: InitVar[Optional[str]] = None
     board_size: int = 9
     rules: str = "chinese"
     komi: float = 7.5
@@ -26,10 +30,10 @@ class KataGoConfig:
     request_timeout_seconds: Optional[float] = 30.0
     katago_pool_size: int = 1
 
-    def __post_init__(self) -> None:
-        self.binary_path = _expand_path(self.binary_path)
-        self.model_path = _expand_path(self.model_path)
-        self.config_path = _expand_path(self.config_path)
+    def __post_init__(self, config_base_dir: Optional[str]) -> None:
+        self.binary_path = _expand_path(self.binary_path, base_dir=config_base_dir)
+        self.model_path = _expand_path(self.model_path, base_dir=config_base_dir)
+        self.config_path = _expand_path(self.config_path, base_dir=config_base_dir)
         _validate_path(self.binary_path, "KataGo binary_path")
         _validate_path(self.model_path, "KataGo model_path")
         _validate_path(self.config_path, "KataGo config_path")
@@ -171,4 +175,7 @@ def _load_yaml(path: str) -> Dict[str, Any]:
 
 def load_config(path: str, cls: type) -> Any:
     data = _load_yaml(path)
+    if cls is KataGoConfig:
+        config_base_dir = os.path.dirname(os.path.abspath(path))
+        return cls(config_base_dir=config_base_dir, **data)
     return cls(**data)

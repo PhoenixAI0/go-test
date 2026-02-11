@@ -124,6 +124,22 @@ def test_katago_config_expands_home():
     assert not config.config_path.startswith("~")
 
 
+def test_katago_config_resolves_relative_paths_with_base_dir(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+
+    config = KataGoConfig(
+        binary_path="bin/katago",
+        model_path="models/kata.bin.gz",
+        config_path="katago_analysis_train.cfg",
+        config_base_dir=str(config_dir),
+    )
+
+    assert config.binary_path == os.path.abspath(config_dir / "bin/katago")
+    assert config.model_path == os.path.abspath(config_dir / "models/kata.bin.gz")
+    assert config.config_path == os.path.abspath(config_dir / "katago_analysis_train.cfg")
+
+
 def test_rollout_config_defaults():
     config = RolloutConfig()
     assert config.num_samples == 8
@@ -434,6 +450,27 @@ board_size: 19
     config = load_config(str(yaml_file), KataGoConfig)
     assert isinstance(config, KataGoConfig)
     assert config.binary_path == "/usr/bin/katago"
+    assert config.board_size == 19
+
+
+def test_load_config_katago_resolves_relative_paths_against_yaml_dir(tmp_path):
+    config_dir = tmp_path / "nested" / "config"
+    config_dir.mkdir(parents=True)
+    yaml_file = config_dir / "katago.yaml"
+    yaml_file.write_text(
+        """
+binary_path: bin/katago
+model_path: models/kata.bin.gz
+config_path: katago_analysis_train.cfg
+board_size: 19
+"""
+    )
+
+    config = load_config(str(yaml_file), KataGoConfig)
+    assert isinstance(config, KataGoConfig)
+    assert config.binary_path == os.path.abspath(config_dir / "bin/katago")
+    assert config.model_path == os.path.abspath(config_dir / "models/kata.bin.gz")
+    assert config.config_path == os.path.abspath(config_dir / "katago_analysis_train.cfg")
     assert config.board_size == 19
 
 

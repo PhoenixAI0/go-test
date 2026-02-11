@@ -232,3 +232,35 @@ def test_simulate_full_game_analysis_cache_reuses_final_position():
 
     assert result.truncated is True
     assert katago.calls == 2
+
+
+def test_simulate_full_game_analysis_cache_plain_dict_handles_eviction():
+    class _CountingKataGo(_StubKataGo):
+        def __init__(self):
+            super().__init__(score_lead=0.0, move="PASS")
+            self.calls = 0
+
+        def analyze_position(self, _board: BoardState) -> KataGoResult:
+            self.calls += 1
+            return super().analyze_position(_board)
+
+    board = BoardState.empty(19)
+    katago = _CountingKataGo()
+    cache: dict[tuple, KataGoResult] = {}
+    result = simulate_full_game(
+        board=board,
+        initial_completion="D4",
+        model=_DummyModel(),
+        tokenizer=_DummyTokenizer(),
+        katago=katago,
+        reward_cfg=RewardConfig(strict_legality=True),
+        rollout_cfg=RolloutConfig(),
+        fullgame_cfg=FullGameConfig(max_plies=1, max_model_turns=10),
+        model_color="B",
+        analysis_cache=cache,
+        max_cache_size=1,
+    )
+
+    assert result.truncated is True
+    assert katago.calls == 2
+    assert len(cache) == 1
