@@ -88,6 +88,8 @@ def build_fullgame_reward_fn(
     rollout_cfg: RolloutConfig,
     full_cfg: FullGameConfig,
     seed: int,
+    reasoning_cfg: object | None = None,
+    model_name: str = "",
 ) -> callable:
     state = {
         "episode_index": 0,
@@ -141,6 +143,8 @@ def build_fullgame_reward_fn(
                     rollout_cfg=rollout_cfg,
                     fullgame_cfg=full_cfg,
                     model_color=model_color,
+                    reasoning_cfg=reasoning_cfg,
+                    reasoning_model_name=model_name,
                     analysis_cache=analysis_cache,
                     max_cache_size=analysis_cache_max_size,
                 )
@@ -284,7 +288,7 @@ def main() -> None:
 
     try:
         from datasets import load_dataset
-        from trl import GRPOConfig, GRPOTrainer
+        from trl import GRPOConfig
         from unsloth import FastLanguageModel
     except ImportError as exc:
         raise RuntimeError("Missing dependencies for GRPO training.") from exc
@@ -472,9 +476,11 @@ def main() -> None:
             trainer_args["report_to"] = ["wandb"]
             trainer_args["run_name"] = run_name
 
-        trainer = GRPOTrainer(
+        from go_rl.reasoning_grpo_trainer import ReasoningGRPOTrainer
+
+        trainer = ReasoningGRPOTrainer(
             model=model,
-            tokenizer=tokenizer,
+            processing_class=tokenizer,
             reward_funcs=build_fullgame_reward_fn(
                 model=model,
                 tokenizer=tokenizer,
@@ -483,9 +489,13 @@ def main() -> None:
                 rollout_cfg=rollout_cfg,
                 full_cfg=full_cfg,
                 seed=train_cfg.seed,
+                reasoning_cfg=train_cfg.reasoning,
+                model_name=train_cfg.model_name,
             ),
             train_dataset=dataset,
             args=GRPOConfig(**trainer_args),
+            reasoning_config=train_cfg.reasoning,
+            reasoning_model_name=train_cfg.model_name,
         )
 
         logger.info("Starting full-game GRPO training...")

@@ -35,3 +35,13 @@ seed: 3407
 # Validation split and eval cadence for W&B loss/perplexity tracking
 eval_split_ratio: 0.05
 eval_steps: 200
+reasoning:
+  enabled: true
+  profile: auto
+  optimize_final_only: true
+  malformed_policy: mask_all
+  qwen_enable_thinking: true
+  gpt_oss_reasoning_effort: medium
+  glm_thinking_type: enabled
+  glm_clear_thinking: false
+  future_reasoning_length_penalty: 0.0

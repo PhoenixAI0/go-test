@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from go_rl.config import FullGameConfig, RewardConfig, RolloutConfig
+from go_rl.config import FullGameConfig, ReasoningConfig, RewardConfig, RolloutConfig
 from go_rl.fullgame_rollout import FullGameEpisodeResult
 
 

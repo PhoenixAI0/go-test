@@ -17,6 +17,16 @@ training:
   grpo_logit_chunk_multiplier: 4
   use_8bit_optimizer: true
   quantization_bits: 8
+  reasoning:
+    enabled: true
+    profile: auto
+    optimize_final_only: true
+    malformed_policy: mask_all
+    qwen_enable_thinking: true
+    gpt_oss_reasoning_effort: medium
+    glm_thinking_type: enabled
+    glm_clear_thinking: false
+    future_reasoning_length_penalty: 0.0
 katago:
   binary_path: ${KATAGO_BIN}
   model_path: ${KATAGO_MODEL}

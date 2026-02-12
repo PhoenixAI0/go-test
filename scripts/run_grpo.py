@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Protocol
 
 from go_rl.board import BoardState, gtp_to_coords
-from go_rl.config import KataGoConfig, RewardConfig, RolloutConfig, TrainingConfig
+from go_rl.config import KataGoConfig, ReasoningConfig, RewardConfig, RolloutConfig, TrainingConfig
 from go_rl.katago import KataGoResult
 from go_rl.katago_pool import build_katago_service
 from go_rl.logging_utils import setup_logging
 from go_rl.prompting import parse_prompt
+from go_rl.reasoning import detect_reasoning_profile, strip_reasoning_for_reward
 from go_rl.rewards import evaluate_move, is_legal_coords
 from go_rl.rollout import normalize_move
 from go_rl.run_logging import write_run_log
@@ -88,7 +89,17 @@ def build_reward_fn(
     katago: _KataGoService,
     reward_cfg: RewardConfig,
     rollout_cfg: RolloutConfig,
+    reasoning_cfg: Optional[ReasoningConfig] = None,
+    model_name: str = "",
+    tokenizer: object | None = None,
 ) -> callable:
+    effective_reasoning = reasoning_cfg or ReasoningConfig(enabled=False)
+    profile = detect_reasoning_profile(
+        model_name=model_name,
+        tokenizer=tokenizer,
+        configured_profile=effective_reasoning.profile,
+    )
+
     def winrate_for_player(winrate: float, to_move: str, player: str) -> float:
         if to_move.upper() == player.upper():
             return winrate
@@ -136,12 +147,13 @@ def build_reward_fn(
                 "candidate_key": None,
             }
 
+            reward_text = strip_reasoning_for_reward(completion, profile=profile)
             try:
-                move = normalize_move(completion, stop_at_pass=rollout_cfg.stop_at_pass)
+                move = normalize_move(reward_text, stop_at_pass=rollout_cfg.stop_at_pass)
                 entry["reward_move"] = move
             except Exception:
                 logger.debug(
-                    "Failed to normalize completion: %r",
+                    "Failed to normalize completion after reasoning strip: %r",
                     completion,
                     exc_info=True,
                 )
@@ -303,7 +315,7 @@ def main() -> None:
 
     try:
         from datasets import load_dataset
-        from trl import GRPOConfig, GRPOTrainer
+        from trl import GRPOConfig
         from unsloth import FastLanguageModel
     except ImportError as exc:
         raise RuntimeError("Missing dependencies for GRPO training.") from exc
@@ -500,12 +512,23 @@ def main() -> None:
         if wandb_enabled:
             trainer_args["report_to"] = ["wandb"]
             trainer_args["run_name"] = run_name
-        trainer = GRPOTrainer(
+        from go_rl.reasoning_grpo_trainer import ReasoningGRPOTrainer
+
+        trainer = ReasoningGRPOTrainer(
             model=model,
-            tokenizer=tokenizer,
-            reward_funcs=build_reward_fn(katago, reward_cfg, rollout_cfg),
+            processing_class=tokenizer,
+            reward_funcs=build_reward_fn(
+                katago=katago,
+                reward_cfg=reward_cfg,
+                rollout_cfg=rollout_cfg,
+                reasoning_cfg=train_cfg.reasoning,
+                model_name=train_cfg.model_name,
+                tokenizer=tokenizer,
+            ),
             train_dataset=dataset,
             args=GRPOConfig(**trainer_args),
+            reasoning_config=train_cfg.reasoning,
+            reasoning_model_name=train_cfg.model_name,
         )
 
         # Train with periodic GPU metrics logging

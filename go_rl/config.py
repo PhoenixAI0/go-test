@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import InitVar, dataclass
+from dataclasses import InitVar, dataclass, field
 from typing import Any, Dict, Optional
 
 
@@ -98,6 +98,31 @@ class RewardConfig:
 
 
 @dataclass
+class ReasoningConfig:
+    enabled: bool = True
+    profile: str = "auto"
+    optimize_final_only: bool = True
+    malformed_policy: str = "mask_all"
+    qwen_enable_thinking: bool = True
+    gpt_oss_reasoning_effort: str = "medium"
+    glm_thinking_type: str = "enabled"
+    glm_clear_thinking: bool = False
+    future_reasoning_length_penalty: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.profile not in {"auto", "qwen3", "gpt_oss", "glm47", "plain"}:
+            raise ValueError("profile must be one of auto, qwen3, gpt_oss, glm47, plain.")
+        if self.malformed_policy not in {"mask_all"}:
+            raise ValueError("malformed_policy must be 'mask_all'.")
+        if self.gpt_oss_reasoning_effort not in {"low", "medium", "high"}:
+            raise ValueError("gpt_oss_reasoning_effort must be low, medium, or high.")
+        if self.glm_thinking_type not in {"enabled", "disabled"}:
+            raise ValueError("glm_thinking_type must be enabled or disabled.")
+        if self.future_reasoning_length_penalty != 0.0:
+            raise ValueError("future_reasoning_length_penalty must remain 0.0 for now.")
+
+
+@dataclass
 class TrainingConfig:
     model_name: str
     output_dir: str
@@ -116,10 +141,13 @@ class TrainingConfig:
     grpo_logit_chunk_multiplier: Optional[int] = 4
     use_8bit_optimizer: bool = True
     quantization_bits: int = 8
+    reasoning: ReasoningConfig = field(default_factory=ReasoningConfig)
 
     def __post_init__(self) -> None:
         self.output_dir = _expand_path(self.output_dir)
         self.log_dir = _expand_path(self.log_dir)
+        if isinstance(self.reasoning, dict):
+            self.reasoning = ReasoningConfig(**self.reasoning)
         if self.quantization_bits not in (0, 4, 8, 16, 32):
             raise ValueError(
                 "quantization_bits must be one of 0, 4, 8, 16, or 32."
@@ -145,11 +173,14 @@ class SftConfig:
     seed: int = 3407
     eval_split_ratio: float = 0.05
     eval_steps: int = 200
+    reasoning: ReasoningConfig = field(default_factory=ReasoningConfig)
 
     def __post_init__(self) -> None:
         self.dataset_path = _expand_path(self.dataset_path)
         self.output_dir = _expand_path(self.output_dir)
         self.log_dir = _expand_path(self.log_dir)
+        if isinstance(self.reasoning, dict):
+            self.reasoning = ReasoningConfig(**self.reasoning)
         if self.quantization_bits not in (0, 4, 8, 16, 32):
             raise ValueError(
                 "quantization_bits must be one of 0, 4, 8, 16, or 32."

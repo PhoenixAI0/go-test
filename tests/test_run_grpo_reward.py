@@ -4,7 +4,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from go_rl.config import RewardConfig, RolloutConfig
+from go_rl.config import ReasoningConfig, RewardConfig, RolloutConfig
 from go_rl.katago import KataGoResult
 
 
@@ -50,6 +50,9 @@ def test_run_grpo_reward_deduplicates_base_and_candidate(monkeypatch):
         katago=katago,
         reward_cfg=RewardConfig(),
         rollout_cfg=RolloutConfig(),
+        reasoning_cfg=ReasoningConfig(profile="qwen3"),
+        model_name="qwen-3-8b",
+        tokenizer=None,
     )
 
     prompt = "board_size: 9\nmove:"
@@ -71,6 +74,9 @@ def test_run_grpo_reward_skips_candidate_batch_for_illegal_moves(monkeypatch):
         katago=katago,
         reward_cfg=RewardConfig(),
         rollout_cfg=RolloutConfig(),
+        reasoning_cfg=ReasoningConfig(profile="qwen3"),
+        model_name="qwen-3-8b",
+        tokenizer=None,
     )
 
     prompt = "board_size: 9\nmove:"
@@ -81,3 +87,25 @@ def test_run_grpo_reward_skips_candidate_batch_for_illegal_moves(monkeypatch):
 
     assert len(rewards) == 2
     assert katago.batch_sizes == [1]
+
+
+def test_run_grpo_reward_reasoning_prefixed_same_as_plain(monkeypatch):
+    module = _load_script_module("run_grpo.py", "run_grpo_script_reward_reasoning")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+
+    katago = _BatchOnlyKataGo()
+    reward_fn = module.build_reward_fn(
+        katago=katago,
+        reward_cfg=RewardConfig(),
+        rollout_cfg=RolloutConfig(),
+        reasoning_cfg=ReasoningConfig(profile="qwen3"),
+        model_name="qwen-3-8b",
+        tokenizer=None,
+    )
+
+    prompt = "board_size: 9\nmove:"
+    rewards = reward_fn(
+        prompts=[prompt, prompt],
+        completions=["D4", "<think>analysis</think> D4"],
+    )
+    assert rewards[0] == rewards[1]

@@ -8,6 +8,11 @@ from .board import BoardState
 from .config import FullGameConfig, RewardConfig, RolloutConfig
 from .katago import KataGoResult
 from .prompting import build_prompt, parse_move
+from .reasoning import (
+    build_generation_kwargs,
+    detect_reasoning_profile,
+    strip_reasoning_for_reward,
+)
 from .rewards import (
     is_legal_move,
     legality_reward,
@@ -96,11 +101,22 @@ def _parse_completion_to_move(completion: str, stop_at_pass: bool) -> str:
             return "PASS"
 
 
+def _extract_reward_move(
+    completion: str,
+    stop_at_pass: bool,
+    profile: str,
+) -> str:
+    final_text = strip_reasoning_for_reward(completion, profile=profile)
+    return _parse_completion_to_move(final_text, stop_at_pass=stop_at_pass)
+
+
 def generate_model_move(
     model: object,
     tokenizer: object,
     board: BoardState,
     rollout_cfg: RolloutConfig,
+    reasoning_profile: str,
+    generation_kwargs: Optional[dict[str, object]] = None,
 ) -> str:
     """Generate one model move from the current board prompt."""
     try:
@@ -121,6 +137,8 @@ def generate_model_move(
         "top_p": rollout_cfg.top_p,
         "pad_token_id": getattr(tokenizer, "eos_token_id", None),
     }
+    if generation_kwargs:
+        gen_kwargs.update(generation_kwargs)
 
     with torch.no_grad():
         output_ids = model.generate(**inputs, **gen_kwargs)
@@ -128,7 +146,11 @@ def generate_model_move(
     prompt_len = int(inputs["input_ids"].shape[-1])
     completion_tokens = output_ids[0][prompt_len:]
     completion_text = tokenizer.decode(completion_tokens, skip_special_tokens=True)
-    return _parse_completion_to_move(completion_text, stop_at_pass=rollout_cfg.stop_at_pass)
+    return _extract_reward_move(
+        completion=completion_text,
+        stop_at_pass=rollout_cfg.stop_at_pass,
+        profile=reasoning_profile,
+    )
 
 
 def _apply_move_or_penalize(
@@ -158,6 +180,8 @@ def simulate_full_game(
     rollout_cfg: RolloutConfig,
     fullgame_cfg: FullGameConfig,
     model_color: str,
+    reasoning_cfg: Optional[object] = None,
+    reasoning_model_name: str = "",
     analysis_cache: Optional[MutableMapping[tuple, KataGoResult]] = None,
     max_cache_size: Optional[int] = None,
 ) -> FullGameEpisodeResult:
@@ -168,6 +192,16 @@ def simulate_full_game(
             f"Board to-move ({board.next_player()}) does not match model_color ({model_color})."
         )
     opponent_color = "W" if model_color == "B" else "B"
+    if reasoning_cfg is None:
+        from .config import ReasoningConfig
+
+        reasoning_cfg = ReasoningConfig(enabled=False)
+    reasoning_profile = detect_reasoning_profile(
+        model_name=reasoning_model_name,
+        tokenizer=tokenizer,
+        configured_profile=getattr(reasoning_cfg, "profile", "plain"),
+    )
+    generation_kwargs = build_generation_kwargs(reasoning_cfg, reasoning_profile)
 
     scorelead_delta_sum = 0.0
     legality_total = 0.0
@@ -247,9 +281,10 @@ def simulate_full_game(
         plies_played += 1
         return True
 
-    first_move = _parse_completion_to_move(
-        initial_completion,
+    first_move = _extract_reward_move(
+        completion=initial_completion,
         stop_at_pass=rollout_cfg.stop_at_pass,
+        profile=reasoning_profile,
     )
     _play_model_turn(first_move)
 
@@ -287,6 +322,8 @@ def simulate_full_game(
                 tokenizer=tokenizer,
                 board=board,
                 rollout_cfg=rollout_cfg,
+                reasoning_profile=reasoning_profile,
+                generation_kwargs=generation_kwargs,
             )
             _play_model_turn(generated_move)
 

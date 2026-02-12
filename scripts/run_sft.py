@@ -5,9 +5,14 @@ import logging
 import math
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict
 
 from go_rl.config import SftConfig, load_config
+from go_rl.reasoning import (
+    build_chat_template_kwargs,
+    build_final_only_mask,
+    detect_reasoning_profile,
+)
 from go_rl.logging_utils import setup_logging
 from go_rl.run_logging import write_run_log
 from go_rl.training_utils import (
@@ -27,8 +32,63 @@ from venv_utils import ensure_virtualenv
 logger = logging.getLogger(__name__)
 
 
-def format_example(example: Dict[str, str]) -> str:
-    return f"{example['prompt']}\n{example['response']}"
+def _convert_to_messages(example: Dict[str, str], eos_token: str) -> Dict[str, Any]:
+    prompt = example["prompt"]
+    response = example["response"]
+    completion = f"{response}{eos_token}"
+    return {
+        "prompt": [{"role": "user", "content": prompt}],
+        "completion": [{"role": "assistant", "content": completion}],
+        "raw_completion": response,
+    }
+
+
+def _add_reasoning_completion_mask(
+    example: Dict[str, Any],
+    tokenizer: Any,
+    profile: str,
+    malformed_policy: str,
+    reasoning_enabled: bool,
+    optimize_final_only: bool,
+    chat_template_kwargs: Dict[str, Any],
+) -> Dict[str, Any]:
+    prompt_messages = example["prompt"]
+    completion_messages = example["completion"]
+    prompt_ids = tokenizer.apply_chat_template(
+        prompt_messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_dict=False,
+        **chat_template_kwargs,
+    )
+    prompt_completion_processed = tokenizer.apply_chat_template(
+        prompt_messages + completion_messages,
+        tokenize=True,
+        return_dict=True,
+        **chat_template_kwargs,
+    )
+    if prompt_ids and isinstance(prompt_ids[0], list):
+        prompt_ids = prompt_ids[0]
+    prompt_completion_ids = prompt_completion_processed["input_ids"]
+    if prompt_completion_ids and isinstance(prompt_completion_ids[0], list):
+        prompt_completion_ids = prompt_completion_ids[0]
+    completion_ids = prompt_completion_ids[len(prompt_ids) :]
+    if not reasoning_enabled or not optimize_final_only:
+        completion_mask = [1] * len(completion_ids)
+    else:
+        completion_mask, malformed, _ = build_final_only_mask(
+            completion=example["raw_completion"],
+            completion_ids=completion_ids,
+            tokenizer=tokenizer,
+            profile=profile,
+            malformed_policy=malformed_policy,
+        )
+        if malformed:
+            logger.debug("SFT sample marked malformed reasoning boundary; masking completion")
+    return {
+        "input_ids": prompt_completion_ids,
+        "completion_mask": [0] * len(prompt_ids) + completion_mask,
+    }
 
 
 def _safe_perplexity(loss_value: float) -> float:
@@ -187,12 +247,39 @@ def main() -> None:
         loftq_config=None,
     )
 
+    reasoning_profile = detect_reasoning_profile(
+        model_name=cfg.model_name,
+        tokenizer=tokenizer,
+        configured_profile=cfg.reasoning.profile,
+    )
+    chat_template_kwargs = build_chat_template_kwargs(cfg.reasoning, reasoning_profile)
+    logger.info("Using reasoning profile: %s", reasoning_profile)
+
     logger.info("Loading dataset from %s", cfg.dataset_path)
     dataset = load_dataset("json", data_files=cfg.dataset_path, split="train")
     if args.smoke:
         smoke_count = min(len(dataset), 32)
         logger.info("Smoke run enabled: using %d rows", smoke_count)
         dataset = dataset.select(range(smoke_count))
+
+    eos_token = tokenizer.eos_token or ""
+    dataset = dataset.map(
+        _convert_to_messages,
+        fn_kwargs={"eos_token": eos_token},
+        remove_columns=[col for col in dataset.column_names if col not in {"prompt", "response"}],
+    )
+    dataset = dataset.map(
+        _add_reasoning_completion_mask,
+        fn_kwargs={
+            "tokenizer": tokenizer,
+            "profile": reasoning_profile,
+            "malformed_policy": cfg.reasoning.malformed_policy,
+            "reasoning_enabled": cfg.reasoning.enabled,
+            "optimize_final_only": cfg.reasoning.optimize_final_only,
+            "chat_template_kwargs": chat_template_kwargs,
+        },
+        remove_columns=["raw_completion", "prompt", "completion"],
+    )
 
     train_dataset = dataset
     eval_dataset = None
@@ -247,6 +334,7 @@ def main() -> None:
         "dataset_num_proc": num_workers,
         "dataloader_num_workers": num_workers,
         "dataloader_pin_memory": True,
+        "completion_only_loss": True,
     }
     # Packing optimization: 3-5x speedup
     if cfg.use_packing:
@@ -266,10 +354,9 @@ def main() -> None:
         trainer_args["run_name"] = run_name
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        formatting_func=format_example,
         args=SFTConfig(**trainer_args),
     )
     # Train with periodic GPU metrics logging

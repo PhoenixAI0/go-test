@@ -6,6 +6,7 @@ import pytest
 from go_rl.config import (
     FullGameConfig,
     KataGoConfig,
+    ReasoningConfig,
     RewardConfig,
     RolloutConfig,
     SftConfig,
@@ -200,6 +201,30 @@ def test_reward_config_custom_values():
     assert config.strict_legality is True
 
 
+def test_reasoning_config_defaults():
+    cfg = ReasoningConfig()
+    assert cfg.enabled is True
+    assert cfg.profile == "auto"
+    assert cfg.optimize_final_only is True
+    assert cfg.malformed_policy == "mask_all"
+    assert cfg.gpt_oss_reasoning_effort == "medium"
+    assert cfg.glm_thinking_type == "enabled"
+    assert cfg.future_reasoning_length_penalty == 0.0
+
+
+def test_reasoning_config_validation():
+    with pytest.raises(ValueError, match="profile"):
+        ReasoningConfig(profile="bad")
+    with pytest.raises(ValueError, match="malformed_policy"):
+        ReasoningConfig(malformed_policy="ignore")
+    with pytest.raises(ValueError, match="gpt_oss_reasoning_effort"):
+        ReasoningConfig(gpt_oss_reasoning_effort="max")
+    with pytest.raises(ValueError, match="glm_thinking_type"):
+        ReasoningConfig(glm_thinking_type="on")
+    with pytest.raises(ValueError, match="future_reasoning_length_penalty"):
+        ReasoningConfig(future_reasoning_length_penalty=0.1)
+
+
 def test_fullgame_config_defaults():
     config = FullGameConfig()
     assert config.enabled is True
@@ -278,6 +303,7 @@ def test_training_config_defaults():
     assert config.grpo_logit_chunk_multiplier == 4
     assert config.use_8bit_optimizer is True
     assert config.quantization_bits == 8
+    assert isinstance(config.reasoning, ReasoningConfig)
 
 
 def test_sft_config_validates_quantization_bits():
@@ -332,6 +358,7 @@ def test_sft_config_defaults():
     assert config.use_packing is True
     assert config.use_8bit_optimizer is True
     assert config.quantization_bits == 8
+    assert isinstance(config.reasoning, ReasoningConfig)
     assert config.seed == 3407
     assert config.eval_split_ratio == 0.05
     assert config.eval_steps == 200
@@ -415,6 +442,7 @@ learning_rate: 0.0001
     assert config.model_name == "gpt2"
     assert config.output_dir == "/output"
     assert config.quantization_bits == 8
+    assert isinstance(config.reasoning, ReasoningConfig)
     assert config.learning_rate == 0.0001
 
 
