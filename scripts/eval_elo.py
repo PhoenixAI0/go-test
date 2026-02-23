@@ -10,12 +10,12 @@ Before running this script:
 
 Example usage:
     # Using a pre-generated match config
-    python scripts/eval_elo.py \\
+    uv run python scripts/eval_elo.py \\
         --katago-bin /path/to/katago \\
         --match-config config/my_match.cfg
 
     # Using template (requires manual editing first)
-    python scripts/eval_elo.py \\
+    uv run python scripts/eval_elo.py \\
         --katago-bin /path/to/katago \\
         --match-config config/katago_match_9x9.cfg \\
         --log-file logs/match_9x9.log \\
@@ -191,12 +191,12 @@ def main() -> None:
         epilog="""
 Examples:
   # Run match with custom config
-  python scripts/eval_elo.py \\
+  uv run python scripts/eval_elo.py \\
       --katago-bin /usr/local/bin/katago \\
       --match-config config/my_match.cfg
 
   # Run match with template (edit template first!)
-  python scripts/eval_elo.py \\
+  uv run python scripts/eval_elo.py \\
       --katago-bin $KATAGO_BIN \\
       --match-config config/katago_match_9x9.cfg
 

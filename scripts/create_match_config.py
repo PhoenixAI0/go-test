@@ -123,7 +123,7 @@ player2 = {{
     print(f"  Number of games: {num_games}")
     print(f"  SGF output: {sgf_output_dir}/")
     print(f"\nTo run the match:")
-    print(f"  python scripts/eval_elo.py --katago-bin {katago_bin} --match-config {output_path}")
+    print(f"  uv run python scripts/eval_elo.py --katago-bin {katago_bin} --match-config {output_path}")
 
 
 def main() -> None:

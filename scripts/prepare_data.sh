@@ -54,7 +54,7 @@ fi
 if [ "$SGF_9x9_COUNT" -gt 0 ]; then
     echo ""
     echo -e "${YELLOW}Preparing 9x9 datasets...${NC}"
-    python scripts/prepare_datasets.py \
+    uv run python scripts/prepare_datasets.py \
         --sgf-dir data/sgf_9x9 \
         --output-dir data \
         --tag 9x9 \
@@ -77,7 +77,7 @@ fi
 if [ "$SGF_19x19_COUNT" -gt 0 ]; then
     echo ""
     echo -e "${YELLOW}Preparing 19x19 datasets...${NC}"
-    python scripts/prepare_datasets.py \
+    uv run python scripts/prepare_datasets.py \
         --sgf-dir data/sgf_19x19 \
         --output-dir data \
         --tag 19x19 \

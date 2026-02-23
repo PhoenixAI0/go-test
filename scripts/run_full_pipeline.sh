@@ -378,7 +378,7 @@ run_katago_eval() {
     echo "  Model: ${model_dir}"
     echo "  Games: ${num_games}"
 
-    python scripts/create_match_config.py \
+    uv run python scripts/create_match_config.py \
         --output "$match_cfg" \
         --board-size "$board_size_num" \
         --num-games "$num_games" \
@@ -396,7 +396,7 @@ run_katago_eval() {
         --katago-name "$katago_name"
 
     local -a EVAL_CMD=(
-        python scripts/eval_elo.py
+        uv run python scripts/eval_elo.py
         --katago-bin "$KATAGO_BIN"
         --match-config "$match_cfg"
         --log-file "$log_file"
@@ -465,6 +465,14 @@ fi
 
 # Activate environment for subsequent steps
 if [ -z "${VIRTUAL_ENV:-}" ]; then
+    if [ ! -f ".venv/bin/activate" ]; then
+        echo -e "${RED}Error: .venv not found.${NC}"
+        echo "Run ./scripts/setup_environment.sh, or create one manually:"
+        echo "  uv venv .venv --python 3.11"
+        echo "  source .venv/bin/activate"
+        echo "  uv sync --extra dev"
+        exit 1
+    fi
     source .venv/bin/activate
 fi
 if [ -f .env ]; then
@@ -478,7 +486,7 @@ if [ "$RUN_EVAL" = true ]; then
     if [ -z "$MODEL_COMMAND_TEMPLATE" ]; then
         echo -e "${RED}Error: evaluation requires --model-command-template (or MODEL_GTP_COMMAND_TEMPLATE env var).${NC}"
         echo "Example:"
-        echo "  --model-command-template \"python scripts/model_gtp_engine.py --model {MODEL_DIR}\""
+        echo "  --model-command-template \"uv run python scripts/model_gtp_engine.py --model {MODEL_DIR}\""
         exit 1
     fi
     if [[ "$MODEL_COMMAND_TEMPLATE" != *"{MODEL_DIR}"* ]]; then
@@ -622,7 +630,7 @@ if [ "$UPLOAD_TO_HUB" = true ]; then
     fi
 
     UPLOAD_CMD=(
-        python scripts/upload_to_hub.py
+        uv run python scripts/upload_to_hub.py
         --model "$FINAL_MODEL_DIR"
         --repo-id "$HF_REPO_ID"
         --board-size "$FINAL_BOARD_NUM"

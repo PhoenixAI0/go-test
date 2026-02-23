@@ -13,7 +13,7 @@ def main() -> None:
         import torch
     except ImportError:
         print("❌ PyTorch not installed")
-        print("Please install PyTorch: uv pip install torch")
+        print("Please sync dependencies: uv sync --extra dev")
         sys.exit(1)
 
     # Check CUDA availability

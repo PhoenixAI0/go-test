@@ -31,20 +31,20 @@ def main() -> int:
         epilog="""
 Examples:
   # Upload SFT model
-  python scripts/upload_to_hub.py \\
+  uv run python scripts/upload_to_hub.py \\
       --model outputs/sft_warm_start \\
       --repo-id username/go-rl-9x9-sft \\
       --board-size 9
 
   # Upload GRPO model with custom settings
-  python scripts/upload_to_hub.py \\
+  uv run python scripts/upload_to_hub.py \\
       --model outputs/grpo_19x19/final \\
       --repo-id username/go-rl-19x19-grpo \\
       --board-size 19 \\
       --private
 
 Prerequisites:
-  1. Install huggingface_hub: uv pip install huggingface_hub
+  1. Sync upload dependencies: uv sync --extra upload
   2. Login: huggingface-cli login
   3. Verify: huggingface-cli whoami
         """,
@@ -122,7 +122,7 @@ Prerequisites:
         from transformers import AutoModelForCausalLM, AutoTokenizer
     except ImportError as e:
         logger.warning(f"Missing required library: {e}")
-        logger.info("Installing with uv...")
+        logger.info("Installing missing packages with uv (project sync is preferred: uv sync --extra upload)...")
         try:
             uv_pip_install(["huggingface_hub", "transformers"])
         except Exception as install_error:

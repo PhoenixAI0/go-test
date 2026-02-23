@@ -67,8 +67,7 @@ Manual install with `uv`:
 ```bash
 uv venv .venv --python 3.11
 source .venv/bin/activate
-uv pip install -r requirements.txt
-uv pip install -e .
+uv sync --extra dev
 ```
 
 ## Data Preparation
@@ -79,19 +78,19 @@ Expected SGF directories:
 
 Dataset helpers:
 ```bash
-python scripts/prepare_datasets.py --sgf-dir data/sgf_9x9 --output-dir data --tag 9x9
-python scripts/prepare_datasets.py --sgf-dir data/sgf_19x19 --output-dir data --tag 19x19
+uv run python scripts/prepare_datasets.py --sgf-dir data/sgf_9x9 --output-dir data --tag 9x9
+uv run python scripts/prepare_datasets.py --sgf-dir data/sgf_19x19 --output-dir data --tag 19x19
 ```
 
 Individual builders:
 ```bash
-python scripts/build_sft_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl
-python scripts/build_rl_prompts.py --sgf-dir data/sgf_9x9 --output data/rl_prompts_9x9.jsonl
+uv run python scripts/build_sft_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl
+uv run python scripts/build_rl_prompts.py --sgf-dir data/sgf_9x9 --output data/rl_prompts_9x9.jsonl
 ```
 
 Fast builder:
 ```bash
-python scripts/fast_build_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl
+uv run python scripts/fast_build_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl
 ```
 
 Manual Go parser compile:
@@ -102,8 +101,8 @@ Manual Go parser compile:
 SGF download and validation helpers:
 ```bash
 ./scripts/download_sample_sgf.sh --board-size 9x9
-python scripts/download_sgf.py --manual-instructions --board-size 9
-python scripts/download_sgf.py --validate-only --board-size 9
+uv run python scripts/download_sgf.py --manual-instructions --board-size 9
+uv run python scripts/download_sgf.py --validate-only --board-size 9
 ```
 
 ## Training
@@ -125,11 +124,11 @@ Common flags:
 
 Direct Python entry points:
 ```bash
-python scripts/run_sft.py --config config/sft_warm_start.yaml
-python scripts/run_sft.py --config config/sft_warm_start_19x19.yaml
-python scripts/run_grpo.py --config config/grpo_9x9.yaml
-python scripts/run_grpo.py --config config/grpo_19x19.yaml
-python scripts/run_grpo_fullgame.py --config config/grpo_fullgame_19x19.yaml
+uv run python scripts/run_sft.py --config config/sft_warm_start.yaml
+uv run python scripts/run_sft.py --config config/sft_warm_start_19x19.yaml
+uv run python scripts/run_grpo.py --config config/grpo_9x9.yaml
+uv run python scripts/run_grpo.py --config config/grpo_19x19.yaml
+uv run python scripts/run_grpo_fullgame.py --config config/grpo_fullgame_19x19.yaml
 ```
 
 ### Four-stage curriculum
@@ -143,26 +142,26 @@ Default gate: winrate >= 0.55 over 200 evaluation games.
 
 Multi-GPU helpers:
 ```bash
-python scripts/check_gpu_setup.py
-python scripts/validate_multi_gpu.py --verbose
+uv run python scripts/check_gpu_setup.py
+uv run python scripts/validate_multi_gpu.py --verbose
 ```
 
 ## Evaluation
 
 Create a KataGo match config and run evaluation:
 ```bash
-python scripts/create_match_config.py \
+uv run python scripts/create_match_config.py \
   --output config/match_9x9.cfg \
   --board-size 9 \
   --num-games 200 \
   --model-command "/path/to/your_gtp_engine --model outputs/grpo_9x9"
 
-python scripts/eval_elo.py --katago-bin $KATAGO_BIN --match-config config/match_9x9.cfg
+uv run python scripts/eval_elo.py --katago-bin $KATAGO_BIN --match-config config/match_9x9.cfg
 ```
 
 `eval_elo.py` can also write structured metrics and log to W&B:
 ```bash
-python scripts/eval_elo.py \
+uv run python scripts/eval_elo.py \
   --katago-bin $KATAGO_BIN \
   --match-config config/match_9x9.cfg \
   --summary-json logs/matches/match_9x9_summary.json \
@@ -173,24 +172,24 @@ python scripts/eval_elo.py \
 
 Upload a trained model or LoRA adapter:
 ```bash
-python scripts/upload_to_hub.py --model outputs/grpo_9x9 --repo-id username/go-rl-9x9-grpo --board-size 9 --push-only
+uv run python scripts/upload_to_hub.py --model outputs/grpo_9x9 --repo-id username/go-rl-9x9-grpo --board-size 9 --push-only
 ```
 
 ## Tests
 
 Run the full test suite:
 ```bash
-pytest
+uv run pytest
 ```
 
 Skip KataGo integration tests:
 ```bash
-pytest -m "not katago"
+uv run pytest -m "not katago"
 ```
 
 Run only KataGo integration tests (requires `.env`):
 ```bash
-pytest -m katago
+uv run pytest -m katago
 ```
 
 ## Outputs and Logs

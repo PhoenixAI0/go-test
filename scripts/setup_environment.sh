@@ -46,9 +46,9 @@ uv venv .venv --python 3.11
 # Activate virtual environment
 source .venv/bin/activate
 
-# Install PyTorch first (GPU version)
-echo -e "${YELLOW}Installing PyTorch with CUDA support...${NC}"
-uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Install project environment (includes PyTorch via uv source config)
+echo -e "${YELLOW}Syncing project dependencies...${NC}"
+uv sync --extra dev
 
 # Verify PyTorch installation
 python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}')"
@@ -58,15 +58,7 @@ if ! python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; the
     exit 1
 fi
 
-echo -e "${GREEN}✓ PyTorch with CUDA installed successfully${NC}"
-
-# Install other dependencies
-echo -e "${YELLOW}Installing project dependencies...${NC}"
-uv pip install -r requirements.txt
-
-# Install go_rl package in editable mode
-echo -e "${YELLOW}Installing go_rl package...${NC}"
-uv pip install -e .
+echo -e "${GREEN}✓ Project dependencies synced (PyTorch CUDA available)${NC}"
 
 # Create necessary directories
 echo -e "${YELLOW}Creating directory structure...${NC}"

@@ -20,12 +20,9 @@ def _find_go_binary() -> str | None:
 
 
 def _build_go_parser_binary() -> Path:
-    repo_root = Path(__file__).resolve().parent.parent
-    parser_dir = repo_root / "go_parser"
+    parser_dir = _find_go_parser_dir()
+    repo_root = parser_dir.parent
     binary_path = parser_dir / "sgf_parser"
-
-    if not parser_dir.exists():
-        raise RuntimeError(f"Go parser directory not found: {parser_dir}")
 
     go_bin = _find_go_binary()
     if not go_bin:
@@ -57,6 +54,28 @@ def _build_go_parser_binary() -> Path:
         raise RuntimeError(f"Go parser binary is missing or not executable: {binary_path}")
 
     return binary_path
+
+
+def _find_go_parser_dir() -> Path:
+    candidates: list[Path] = []
+
+    file_path = Path(__file__).resolve()
+    candidates.extend(parent / "go_parser" for parent in file_path.parents)
+
+    cwd = Path.cwd().resolve()
+    candidates.extend(parent / "go_parser" for parent in [cwd, *cwd.parents])
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if (candidate / "main.go").exists():
+            return candidate
+
+    raise RuntimeError(
+        f"Go parser directory not found from module path {file_path} or cwd {cwd}"
+    )
 
 
 def run_go_parser(

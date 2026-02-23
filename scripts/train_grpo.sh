@@ -140,7 +140,7 @@ fi
 # Build command
 if [ -z "$MULTI_GPU" ]; then
     # Single GPU mode (backward compatible)
-    CMD="python scripts/run_grpo.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
+    CMD="uv run python scripts/run_grpo.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
 else
     if [ "$MULTI_GPU" = "auto" ]; then
         if command -v nvidia-smi &>/dev/null; then
@@ -227,7 +227,7 @@ if [ $? -eq 0 ]; then
     if [ "$SMOKE_TEST" = false ]; then
         echo "Next steps:"
         echo "1. Evaluate the trained model with KataGo matches"
-        echo "2. Run: python scripts/eval_elo.py --katago-bin \$KATAGO_BIN ..."
+        echo "2. Run: uv run python scripts/eval_elo.py --katago-bin \$KATAGO_BIN ..."
         echo ""
         if [ "$BOARD_SIZE" = "9x9" ]; then
             echo "Consider promoting to 19x19 if Elo threshold is met!"

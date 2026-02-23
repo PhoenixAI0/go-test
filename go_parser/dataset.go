@@ -240,17 +240,3 @@ func writeSample(writer *bufio.Writer, sample Sample) error {
 	_, err = writer.WriteString("}\n")
 	return err
 }
-
-func min(a int, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a int, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}

@@ -41,7 +41,7 @@ if [ -d ".venv" ]; then
         echo -e "${GREEN}✓${NC}"
     else
         echo -e "${RED}✗ Missing packages${NC}"
-        echo "   Run: source .venv/bin/activate && uv pip install -r requirements.txt"
+        echo "   Run: source .venv/bin/activate && uv sync --extra dev"
         ERRORS=$((ERRORS + 1))
     fi
     

@@ -43,19 +43,19 @@ def main() -> int:
         epilog="""
 Examples:
   # Validate existing SGF files
-  python scripts/download_sgf.py --validate-only --board-size 9
+  uv run python scripts/download_sgf.py --validate-only --board-size 9
 
   # List available sources
-  python scripts/download_sgf.py --list-sources
+  uv run python scripts/download_sgf.py --list-sources
 
   # Download from KGS (placeholder)
-  python scripts/download_sgf.py --source kgs --board-size 19 --count 100
+  uv run python scripts/download_sgf.py --source kgs --board-size 19 --count 100
 
   # Download from OGS (requires API key)
-  python scripts/download_sgf.py --source ogs --api-key YOUR_KEY --count 100
+  uv run python scripts/download_sgf.py --source ogs --api-key YOUR_KEY --count 100
 
   # Show manual download instructions
-  python scripts/download_sgf.py --manual-instructions --board-size 9
+  uv run python scripts/download_sgf.py --manual-instructions --board-size 9
 
 Note: Most sources require manual download or API keys. This script provides
       validation and guidance for obtaining SGF files.

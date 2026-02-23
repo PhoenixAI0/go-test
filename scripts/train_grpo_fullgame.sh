@@ -121,7 +121,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 if [ -z "$MULTI_GPU" ]; then
-    CMD="python scripts/run_grpo_fullgame.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
+    CMD="uv run python scripts/run_grpo_fullgame.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
 else
     if [ "$MULTI_GPU" = "auto" ]; then
         if command -v nvidia-smi &>/dev/null; then

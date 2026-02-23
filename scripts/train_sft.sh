@@ -120,7 +120,7 @@ fi
 # Build command
 if [ -z "$MULTI_GPU" ]; then
     # Single GPU mode (backward compatible)
-    CMD="python scripts/run_sft.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
+    CMD="uv run python scripts/run_sft.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
 else
     if [ "$MULTI_GPU" = "auto" ]; then
         if command -v nvidia-smi &>/dev/null; then
