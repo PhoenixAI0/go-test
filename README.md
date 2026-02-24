@@ -59,13 +59,13 @@ If you want to verify your setup at any point:
 ## Manual Setup
 
 Requirements:
-- Python 3.10+
+- Python 3.12+
 - NVIDIA GPU with CUDA for training (setup script is optimized for Linux)
 - KataGo binary + model + config (the setup script creates `.env` with paths)
 
 Manual install with `uv`:
 ```bash
-uv venv .venv --python 3.11
+uv venv .venv --python 3.12
 source .venv/bin/activate
 uv sync --extra dev
 ```

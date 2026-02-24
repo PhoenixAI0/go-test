@@ -111,7 +111,7 @@ def check_accelerate_installation(auto_install: bool = True) -> Tuple[bool, str]
         return True, f"Accelerate installed (version {version})"
     except ImportError:
         if not auto_install:
-            return False, "Accelerate is not installed (run: uv sync --extra dev)"
+            return False, "Accelerate is not installed (run: uv sync --locked)"
         try:
             uv_pip_install(["accelerate"])
         except Exception as exc:
@@ -349,7 +349,7 @@ def main() -> int:
         print("❌ SOME CHECKS FAILED - Please fix issues above")
         print("\nCommon solutions:")
         print("  - Install CUDA drivers and PyTorch with CUDA support")
-        print("  - Sync project deps: uv sync --extra dev")
+        print("  - Sync project deps: uv sync --locked")
         print("  - Ensure config files exist in config/accelerate/")
 
     print("=" * 70 + "\n")

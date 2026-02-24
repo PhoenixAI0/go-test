@@ -116,7 +116,7 @@ def test_collect_env_info():
 
     with patch("go_rl.run_logging._package_version") as mock_version, patch(
         "go_rl.run_logging._gpu_info"
-    ) as mock_gpu, patch("sys.version", "3.11.0 (main)"), patch(
+    ) as mock_gpu, patch("sys.version", "3.12.0 (main)"), patch(
         "platform.platform", return_value="Linux-5.15.0"
     ), patch(
         "os.getcwd", return_value="/home/user/project"
@@ -127,7 +127,7 @@ def test_collect_env_info():
         info = collect_env_info(packages)
 
     assert "python" in info
-    assert info["python"] == "3.11.0"
+    assert info["python"] == "3.12.0"
     assert info["platform"] == "Linux-5.15.0"
     assert info["cwd"] == "/home/user/project"
     assert "packages" in info
@@ -140,7 +140,7 @@ def test_collect_env_info():
 def test_collect_env_info_empty_packages():
     """Test collect_env_info with no packages."""
     with patch("go_rl.run_logging._gpu_info") as mock_gpu, patch(
-        "sys.version", "3.11.0"
+        "sys.version", "3.12.0"
     ), patch("platform.platform", return_value="Linux"), patch(
         "os.getcwd", return_value="/home"
     ):
@@ -163,7 +163,7 @@ def test_write_run_log(tmp_path):
         "go_rl.run_logging.datetime"
     ) as mock_datetime:
         mock_env.return_value = {
-            "python": "3.11.0",
+            "python": "3.12.0",
             "packages": {},
             "gpu": {"available": False},
         }
@@ -189,7 +189,7 @@ def test_write_run_log(tmp_path):
     assert content["config_path"] == config_path
     assert content["config"] == config_snapshot
     assert "environment" in content
-    assert content["environment"]["python"] == "3.11.0"
+    assert content["environment"]["python"] == "3.12.0"
 
 
 def test_write_run_log_with_extra(tmp_path):
@@ -200,7 +200,7 @@ def test_write_run_log_with_extra(tmp_path):
     with patch("go_rl.run_logging.collect_env_info") as mock_env, patch(
         "go_rl.run_logging.datetime"
     ) as mock_datetime:
-        mock_env.return_value = {"python": "3.11.0"}
+        mock_env.return_value = {"python": "3.12.0"}
         mock_datetime.utcnow.return_value.strftime.return_value = "20260130_120000"
 
         log_path = write_run_log(
@@ -228,7 +228,7 @@ def test_write_run_log_with_packages(tmp_path):
         "go_rl.run_logging.datetime"
     ) as mock_datetime:
         mock_env.return_value = {
-            "python": "3.11.0",
+            "python": "3.12.0",
             "packages": {"numpy": "1.24.0", "torch": "2.0.0"},
         }
         mock_datetime.utcnow.return_value.strftime.return_value = "20260130_120000"
@@ -258,7 +258,7 @@ def test_write_run_log_creates_directory(tmp_path):
     with patch("go_rl.run_logging.collect_env_info") as mock_env, patch(
         "go_rl.run_logging.datetime"
     ) as mock_datetime:
-        mock_env.return_value = {"python": "3.11.0"}
+        mock_env.return_value = {"python": "3.12.0"}
         mock_datetime.utcnow.return_value.strftime.return_value = "20260130_120000"
 
         log_path = write_run_log(str(log_dir), "test_run", "/config/test.yaml", {})
@@ -274,7 +274,7 @@ def test_write_run_log_json_formatting(tmp_path):
     with patch("go_rl.run_logging.collect_env_info") as mock_env, patch(
         "go_rl.run_logging.datetime"
     ) as mock_datetime:
-        mock_env.return_value = {"python": "3.11.0"}
+        mock_env.return_value = {"python": "3.12.0"}
         mock_datetime.utcnow.return_value.strftime.return_value = "20260130_120000"
 
         log_path = write_run_log(

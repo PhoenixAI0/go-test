@@ -41,14 +41,19 @@ uv --version
 
 # Create virtual environment
 echo -e "${YELLOW}Creating virtual environment...${NC}"
-uv venv .venv --python 3.11
+uv venv .venv --python 3.12
 
 # Activate virtual environment
 source .venv/bin/activate
 
-# Install project environment (includes PyTorch via uv source config)
+# Install project environment from the committed lockfile (includes PyTorch via uv source config)
 echo -e "${YELLOW}Syncing project dependencies...${NC}"
-uv sync --extra dev
+if [ ! -f "uv.lock" ]; then
+    echo -e "${RED}Error: uv.lock not found in repository root.${NC}"
+    echo "This setup script requires a committed lockfile."
+    exit 1
+fi
+uv sync --locked
 
 # Verify PyTorch installation
 python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}')"

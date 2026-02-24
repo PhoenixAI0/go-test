@@ -468,9 +468,9 @@ if [ -z "${VIRTUAL_ENV:-}" ]; then
     if [ ! -f ".venv/bin/activate" ]; then
         echo -e "${RED}Error: .venv not found.${NC}"
         echo "Run ./scripts/setup_environment.sh, or create one manually:"
-        echo "  uv venv .venv --python 3.11"
+        echo "  uv venv .venv --python 3.12"
         echo "  source .venv/bin/activate"
-        echo "  uv sync --extra dev"
+        echo "  uv sync --locked"
         exit 1
     fi
     source .venv/bin/activate

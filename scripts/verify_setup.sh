@@ -41,7 +41,7 @@ if [ -d ".venv" ]; then
         echo -e "${GREEN}✓${NC}"
     else
         echo -e "${RED}✗ Missing packages${NC}"
-        echo "   Run: source .venv/bin/activate && uv sync --extra dev"
+        echo "   Run: source .venv/bin/activate && uv sync --locked"
         ERRORS=$((ERRORS + 1))
     fi
     
