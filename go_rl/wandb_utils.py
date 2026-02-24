@@ -24,7 +24,7 @@ def configure_wandb(
         import wandb
     except ImportError:
         logger.warning("wandb not installed; disabling W&B reporting.")
-        logger.info("Install with: uv pip install wandb")
+        logger.info("Sync project dependencies with: uv sync --locked")
         return False
 
     if project:

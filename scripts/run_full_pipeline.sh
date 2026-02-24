@@ -235,7 +235,7 @@ load_promotion_gate_from_config() {
     while IFS= read -r gate_line; do
         gate_values+=("$gate_line")
     done < <(
-        python - "$cfg_path" <<'PY'
+        uv run python - "$cfg_path" <<'PY'
 import sys
 import yaml
 
@@ -260,7 +260,7 @@ load_fullgame_promotion_gate_from_config() {
     while IFS= read -r gate_line; do
         gate_values+=("$gate_line")
     done < <(
-        python - "$cfg_path" <<'PY'
+        uv run python - "$cfg_path" <<'PY'
 import sys
 import yaml
 
@@ -283,7 +283,7 @@ evaluate_promotion_gate() {
     local metric="$2"
     local threshold_elo="$3"
     local threshold_winrate="$4"
-    python - "$summary_json" "$metric" "$threshold_elo" "$threshold_winrate" <<'PY'
+    uv run python - "$summary_json" "$metric" "$threshold_elo" "$threshold_winrate" <<'PY'
 import json
 import sys
 

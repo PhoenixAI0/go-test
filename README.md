@@ -37,7 +37,7 @@ for SFT and GRPO using KataGo-based rewards. Dataset parsing is handled by the G
 5. Run the full pipeline (default includes 9x9 GRPO -> promotion gate -> 19x19 GRPO -> 19x19 full-game GRPO when the second gate passes):
 ```bash
 ./scripts/run_full_pipeline.sh \
-  --model-command-template "python /path/to/your_gtp_engine.py --model {MODEL_DIR}"
+  --model-command-template "uv run python /path/to/your_gtp_engine.py --model {MODEL_DIR}"
 ```
 
 To skip all evaluation and promotion-gate checks, pass `--no-eval`.
@@ -46,7 +46,7 @@ To skip the full-game stage only, pass `--skip-fullgame`.
 6. Run the full pipeline with automatic Hub publish:
 ```bash
 ./scripts/run_full_pipeline.sh \
-  --model-command-template "python /path/to/your_gtp_engine.py --model {MODEL_DIR}" \
+  --model-command-template "uv run python /path/to/your_gtp_engine.py --model {MODEL_DIR}" \
   --upload-to-hub \
   --hf-repo-id username/go-rl-grpo
 ```
@@ -66,9 +66,10 @@ Requirements:
 Manual install with `uv`:
 ```bash
 uv venv .venv --python 3.12
-source .venv/bin/activate
 uv sync --extra dev
 ```
+
+(`uv run ...` uses the project `.venv` automatically, so manual activation is optional.)
 
 ## Data Preparation
 

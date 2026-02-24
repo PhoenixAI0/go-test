@@ -35,20 +35,18 @@ fi
 # Check 2: Python packages (if venv exists)
 if [ -d ".venv" ]; then
     echo -n "2. Python packages: "
-    source .venv/bin/activate 2>/dev/null || true
-    
-    if python -c "import torch, transformers, datasets, trl, sgfmill" 2>/dev/null; then
+    if uv run python -c "import torch, transformers, datasets, trl, sgfmill" 2>/dev/null; then
         echo -e "${GREEN}✓${NC}"
     else
         echo -e "${RED}✗ Missing packages${NC}"
-        echo "   Run: source .venv/bin/activate && uv sync --locked"
+        echo "   Run: uv sync --locked"
         ERRORS=$((ERRORS + 1))
     fi
     
     # Check CUDA
     echo -n "3. PyTorch CUDA: "
-    if python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
-        CUDA_VERSION=$(python -c "import torch; print(torch.version.cuda)")
+    if uv run python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+        CUDA_VERSION=$(uv run python -c "import torch; print(torch.version.cuda)")
         echo -e "${GREEN}✓ (CUDA ${CUDA_VERSION})${NC}"
     else
         echo -e "${RED}✗ Not available${NC}"

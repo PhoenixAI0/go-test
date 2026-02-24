@@ -127,7 +127,7 @@ else
         if command -v nvidia-smi &>/dev/null; then
             MULTI_GPU=$(nvidia-smi --list-gpus | wc -l | tr -d ' ')
         else
-            MULTI_GPU=$(python -c "import torch; print(torch.cuda.device_count())" 2>/dev/null || echo 0)
+            MULTI_GPU=$(uv run python -c "import torch; print(torch.cuda.device_count())" 2>/dev/null || echo 0)
         fi
         if [ "$MULTI_GPU" -eq 0 ]; then
             echo -e "${RED}Error: Auto-detect found no GPUs${NC}"
@@ -159,7 +159,7 @@ else
         exit 1
     fi
 
-    CMD="accelerate launch --config_file=$ACCELERATE_CONFIG scripts/run_grpo_fullgame.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
+    CMD="uv run accelerate launch --config_file=$ACCELERATE_CONFIG scripts/run_grpo_fullgame.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
     echo -e "${GREEN}Multi-GPU training enabled: ${MULTI_GPU} GPU(s)${NC}"
 fi
 

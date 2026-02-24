@@ -48,36 +48,25 @@ mkdir -p "$TARGET_DIR"
 echo -e "${YELLOW}Preparing to download SGF files for ${BOARD_SIZE}...${NC}"
 echo ""
 
-# Check if Python is available
-if ! command -v python &>/dev/null && ! command -v python3 &>/dev/null; then
-    echo -e "${RED}Error: Python not found${NC}"
-    echo "Python is required to run the download script."
+# Check if uv is available
+if ! command -v uv &>/dev/null; then
+    echo -e "${RED}Error: uv not found${NC}"
+    echo "uv is required to run the download script."
     exit 1
 fi
 
-# Ensure virtual environment is activated
-if [ -z "${VIRTUAL_ENV:-}" ]; then
-    if [ -f .venv/bin/activate ]; then
-        echo -e "${YELLOW}Activating virtual environment...${NC}"
-        source .venv/bin/activate
-    else
-        echo -e "${RED}Error: Virtual environment not found (.venv)${NC}"
-        echo "Run: ./scripts/setup_environment.sh"
-        exit 1
-    fi
-fi
-
-# Use python3 if available, fallback to python
-PYTHON_CMD="python3"
-if ! command -v python3 &>/dev/null; then
-    PYTHON_CMD="python"
+# Ensure project environment exists (uv run will use .venv automatically)
+if [ ! -d ".venv" ]; then
+    echo -e "${RED}Error: Virtual environment not found (.venv)${NC}"
+    echo "Run: ./scripts/setup_environment.sh"
+    exit 1
 fi
 
 # Extract numeric board size (9 from "9x9", etc.)
 NUMERIC_SIZE=$(echo "$BOARD_SIZE" | cut -d'x' -f1)
 
-# Run Python download script (shows manual instructions)
-$PYTHON_CMD scripts/download_sgf.py \
+# Run Python download script (uv uses the project .venv automatically)
+uv run python scripts/download_sgf.py \
     --board-size "$NUMERIC_SIZE" \
     --output-dir "$TARGET_DIR" \
     --manual-instructions

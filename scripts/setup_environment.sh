@@ -43,9 +43,6 @@ uv --version
 echo -e "${YELLOW}Creating virtual environment...${NC}"
 uv venv .venv --python 3.12
 
-# Activate virtual environment
-source .venv/bin/activate
-
 # Install project environment from the committed lockfile (includes PyTorch via uv source config)
 echo -e "${YELLOW}Syncing project dependencies...${NC}"
 if [ ! -f "uv.lock" ]; then
@@ -56,9 +53,9 @@ fi
 uv sync --locked
 
 # Verify PyTorch installation
-python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}')"
+uv run python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}')"
 
-if ! python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+if ! uv run python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     echo -e "${RED}Error: PyTorch CUDA not available. Please check your CUDA installation.${NC}"
     exit 1
 fi
@@ -161,7 +158,7 @@ echo "2. Run: ./scripts/prepare_data.sh"
 echo "3. Run: ./scripts/train_sft.sh (for supervised fine-tuning)"
 echo "4. Run: ./scripts/train_grpo.sh (for RL training)"
 echo ""
-echo "To activate the environment in the future:"
-echo "  source .venv/bin/activate"
+echo "Scripts use the project environment automatically via uv (no manual activation required)."
+echo "If you need env vars for evaluation/training helpers, run:"
 echo "  source .env"
 echo ""

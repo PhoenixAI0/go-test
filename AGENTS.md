@@ -21,9 +21,9 @@ Setup and validation:
 
 Dataset prep:
 - `./scripts/prepare_data.sh` builds `data/sft_*.jsonl` and `data/rl_prompts_*.jsonl`.
-- `python scripts/prepare_datasets.py --sgf-dir data/sgf_9x9 --tag 9x9`
-- `python scripts/fast_build_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl` (uses Go parser if available).
-- `python scripts/download_sgf.py --manual-instructions --board-size 9`
+- `uv run python scripts/prepare_datasets.py --sgf-dir data/sgf_9x9 --tag 9x9`
+- `uv run python scripts/fast_build_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl` (uses Go parser if available).
+- `uv run python scripts/download_sgf.py --manual-instructions --board-size 9`
 
 Training:
 - `./scripts/train_sft.sh --board-size 9x9 --smoke`
@@ -33,16 +33,16 @@ Training:
 - Multi-GPU uses `./scripts/train_sft.sh --multi-gpu 2` (configs in `config/accelerate/`).
 
 Evaluation:
-- `python scripts/create_match_config.py --output config/my_match.cfg --model-command "python ..."`
-- `python scripts/eval_elo.py --katago-bin $KATAGO_BIN --match-config config/my_match.cfg`
+- `uv run python scripts/create_match_config.py --output config/my_match.cfg --model-command "uv run python ..."`
+- `uv run python scripts/eval_elo.py --katago-bin $KATAGO_BIN --match-config config/my_match.cfg`
 
 Model upload:
-- `python scripts/upload_to_hub.py --model outputs/grpo_9x9 --repo-id user/repo --board-size 9 --push-only`
+- `uv run python scripts/upload_to_hub.py --model outputs/grpo_9x9 --repo-id user/repo --board-size 9 --push-only`
 
 Testing:
-- `pytest`
-- `pytest -m "not katago"` to skip KataGo integration tests.
-- `pytest -m katago` to run KataGo integration tests (requires `.env`).
+- `uv run pytest`
+- `uv run pytest -m "not katago"` to skip KataGo integration tests.
+- `uv run pytest -m katago` to run KataGo integration tests (requires `.env`).
 
 ## Coding Style & Naming Conventions
 - Use 4-space indentation and PEP8-style naming (`snake_case` for functions/files, `CamelCase` for classes).
@@ -61,5 +61,5 @@ Testing:
 
 ## Configuration Notes
 - Training scripts expect YAML configs with paths to KataGo binaries/models (usually via `.env` created by setup).
-- Multi-GPU uses `config/accelerate/*.yaml` with `accelerate launch`.
+- Multi-GPU uses `config/accelerate/*.yaml` with `uv run accelerate launch`.
 - Output directories (e.g., `outputs/`, `logs/`, generated datasets) should be excluded from version control unless explicitly requested.
