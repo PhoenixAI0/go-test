@@ -6,6 +6,7 @@ from typing import List, Optional, Set, Tuple
 _GTP_COLUMNS = "ABCDEFGHJKLMNOPQRST"
 _STONE = {"B": 1, "W": 2}
 _EMPTY = 0
+_STONE_TO_CHAR = {_EMPTY: ".", _STONE["B"]: "X", _STONE["W"]: "O"}
 
 
 class GtpParseError(ValueError):
@@ -111,12 +112,57 @@ def _apply_strict_move(
 class BoardState:
     size: int
     moves: List[Tuple[str, Optional[Tuple[int, int]]]] = field(default_factory=list)
+    board_snapshot: Optional[List[List[int]]] = None
+    next_player_override: Optional[str] = None
+    previous_board_snapshot: Optional[List[List[int]]] = None
 
     @classmethod
     def empty(cls, size: int) -> "BoardState":
         return cls(size=size, moves=[])
 
+    @classmethod
+    def from_matrix(
+        cls,
+        size: int,
+        board: List[List[int]],
+        next_player: str,
+        previous_board: Optional[List[List[int]]] = None,
+    ) -> "BoardState":
+        normalized = next_player.strip().upper()
+        if normalized not in _STONE:
+            raise ValueError(f"Unknown player: {next_player}")
+        if len(board) != size or any(len(row) != size for row in board):
+            raise ValueError("Board matrix shape does not match board size")
+        if previous_board is not None:
+            if len(previous_board) != size or any(len(row) != size for row in previous_board):
+                raise ValueError("Previous board matrix shape does not match board size")
+        return cls(
+            size=size,
+            moves=[],
+            board_snapshot=_copy_board(board),
+            next_player_override=normalized,
+            previous_board_snapshot=_copy_board(previous_board) if previous_board is not None else None,
+        )
+
+    def has_snapshot(self) -> bool:
+        return self.board_snapshot is not None
+
+    def has_move_history(self) -> bool:
+        return bool(self.moves) and self.board_snapshot is None
+
+    def clone(self) -> "BoardState":
+        if self.board_snapshot is not None:
+            return BoardState.from_matrix(
+                size=self.size,
+                board=self.board_snapshot,
+                next_player=self.next_player(),
+                previous_board=self.previous_board_snapshot,
+            )
+        return BoardState(size=self.size, moves=list(self.moves))
+
     def _current_board(self) -> List[List[int]]:
+        if self.board_snapshot is not None:
+            return _copy_board(self.board_snapshot)
         board = [[_EMPTY for _ in range(self.size)] for _ in range(self.size)]
         for index, (player, coords) in enumerate(self.moves, start=1):
             if coords is None:
@@ -133,6 +179,11 @@ class BoardState:
     def current_board(self) -> List[List[int]]:
         return self._current_board()
 
+    def previous_board(self) -> Optional[List[List[int]]]:
+        if self.previous_board_snapshot is None:
+            return None
+        return _copy_board(self.previous_board_snapshot)
+
     def occupied(self) -> set[Tuple[int, int]]:
         board = self._current_board()
         stones = set()
@@ -142,7 +193,21 @@ class BoardState:
                     stones.add((row, col))
         return stones
 
+    def stones(self) -> List[Tuple[str, Tuple[int, int]]]:
+        stones: List[Tuple[str, Tuple[int, int]]] = []
+        board = self._current_board()
+        for row in range(self.size):
+            for col in range(self.size):
+                value = board[row][col]
+                if value == _STONE["B"]:
+                    stones.append(("B", (row, col)))
+                elif value == _STONE["W"]:
+                    stones.append(("W", (row, col)))
+        return stones
+
     def next_player(self) -> str:
+        if self.next_player_override is not None:
+            return self.next_player_override
         if not self.moves:
             return "B"
         last_player = self.moves[-1][0].upper()
@@ -166,6 +231,13 @@ class BoardState:
     def _strict_board_state(
         self,
     ) -> Tuple[List[List[int]], Optional[List[List[int]]]]:
+        if self.board_snapshot is not None:
+            previous = (
+                _copy_board(self.previous_board_snapshot)
+                if self.previous_board_snapshot is not None
+                else None
+            )
+            return _copy_board(self.board_snapshot), previous
         board = [[_EMPTY for _ in range(self.size)] for _ in range(self.size)]
         previous: Optional[List[List[int]]] = None
         for player, coords in self.moves:
@@ -226,12 +298,25 @@ class BoardState:
         if not is_legal:
             rule_label = "strict" if strict else "basic"
             raise ValueError(f"Illegal move for {rule_label} rules: {move_label}")
+        if self.board_snapshot is not None:
+            current = self._current_board()
+            self.previous_board_snapshot = _copy_board(current)
+            if coords is not None:
+                color = _STONE[player]
+                current = _apply_strict_move(current, color, coords)
+            self.board_snapshot = current
+            self.next_player_override = "W" if player == "B" else "B"
+            return
         self.moves.append((player, coords))
 
-    def to_prompt(self) -> str:
-        lines = [f"board_size: {self.size}"]
-        for player, coords in self.moves:
-            gtp_move = coords_to_gtp(coords, self.size)
-            lines.append(f"{player}: {gtp_move}")
+    def to_prompt(self, player: Optional[str] = None) -> str:
+        to_play = player.strip().upper() if player is not None else self.next_player()
+        if to_play not in _STONE:
+            raise ValueError(f"Unknown player: {player}")
+        board = self._current_board()
+        lines = [f"board_size: {self.size}", f"to_play: {to_play}", "board:"]
+        for row in board:
+            row_text = "".join(_STONE_TO_CHAR[value] for value in row)
+            lines.append(row_text)
         lines.append("move:")
         return "\n".join(lines)

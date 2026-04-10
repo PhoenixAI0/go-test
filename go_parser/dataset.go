@@ -193,7 +193,7 @@ func samplePositions(game *SgfGame, maxPositions int) ([]Sample, error) {
 		if err != nil {
 			return nil, err
 		}
-		prompt, err := board.Prompt()
+			prompt, err := board.Prompt(move.Player)
 		if err != nil {
 			return nil, err
 		}

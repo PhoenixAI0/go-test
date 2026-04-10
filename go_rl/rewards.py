@@ -55,6 +55,11 @@ def resolve_legality_level(config: RewardConfig) -> LegalityLevel:
 def _strict_state_with_history(
     board: BoardState,
 ) -> tuple[list[list[int]], Optional[list[list[int]]], BoardHistory]:
+    if board.has_snapshot():
+        current = board.current_board()
+        history = BoardHistory()
+        history.add(current)
+        return current, board.previous_board(), history
     current = [[_EMPTY for _ in range(board.size)] for _ in range(board.size)]
     history = BoardHistory()
     history.add(current)

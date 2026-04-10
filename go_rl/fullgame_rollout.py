@@ -7,8 +7,9 @@ from typing import MutableMapping, Optional, Protocol
 from .board import BoardState
 from .config import FullGameConfig, RewardConfig, RolloutConfig
 from .katago import KataGoResult
-from .prompting import build_prompt, parse_move
+from .prompting import build_generation_inputs, build_prompt, parse_move
 from .reasoning import (
+    build_chat_template_kwargs,
     build_generation_kwargs,
     detect_reasoning_profile,
     strip_reasoning_for_reward,
@@ -71,7 +72,7 @@ def align_board_to_player_turn(board: BoardState, player: str) -> BoardState:
 
     If needed, inserts a single PASS by the current side to move.
     """
-    aligned = BoardState(size=board.size, moves=list(board.moves))
+    aligned = board.clone()
     desired = player.strip().upper()
     if desired not in {"B", "W"}:
         raise ValueError(f"Unknown player color: {player}")
@@ -84,8 +85,12 @@ def align_board_to_player_turn(board: BoardState, player: str) -> BoardState:
 
 def board_key(
     board: BoardState,
-) -> tuple[int, tuple[tuple[str, Optional[tuple[int, int]]], ...]]:
-    return (board.size, tuple((player.upper(), coords) for player, coords in board.moves))
+) -> tuple[int, str, tuple[tuple[int, ...], ...]]:
+    return (
+        board.size,
+        board.next_player(),
+        tuple(tuple(row) for row in board.current_board()),
+    )
 
 
 def _parse_completion_to_move(completion: str, stop_at_pass: bool) -> str:
@@ -116,6 +121,7 @@ def generate_model_move(
     board: BoardState,
     rollout_cfg: RolloutConfig,
     reasoning_profile: str,
+    chat_template_kwargs: Optional[dict[str, object]] = None,
     generation_kwargs: Optional[dict[str, object]] = None,
 ) -> str:
     """Generate one model move from the current board prompt."""
@@ -126,7 +132,11 @@ def generate_model_move(
         return "PASS"
 
     prompt = build_prompt(board)
-    inputs = tokenizer(prompt, return_tensors="pt")
+    inputs = build_generation_inputs(
+        tokenizer=tokenizer,
+        prompt=prompt,
+        chat_template_kwargs=chat_template_kwargs,
+    )
     model_device = getattr(model, "device", None)
     if model_device is not None:
         inputs = {key: value.to(model_device) for key, value in inputs.items()}
@@ -202,6 +212,7 @@ def simulate_full_game(
         configured_profile=getattr(reasoning_cfg, "profile", "plain"),
     )
     generation_kwargs = build_generation_kwargs(reasoning_cfg, reasoning_profile)
+    chat_template_kwargs = build_chat_template_kwargs(reasoning_cfg, reasoning_profile)
 
     scorelead_delta_sum = 0.0
     legality_total = 0.0
@@ -323,6 +334,7 @@ def simulate_full_game(
                 board=board,
                 rollout_cfg=rollout_cfg,
                 reasoning_profile=reasoning_profile,
+                chat_template_kwargs=chat_template_kwargs,
                 generation_kwargs=generation_kwargs,
             )
             _play_model_turn(generated_move)

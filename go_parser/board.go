@@ -23,8 +23,6 @@ type Coord struct {
 type BoardState struct {
 	size        int
 	moves       []Move
-	promptBuild strings.Builder
-	promptBad   bool
 	board       []byte
 	prevBoard   []byte
 	invalid     bool
@@ -34,22 +32,41 @@ func NewBoardState(size int) *BoardState {
 	state := &BoardState{
 		size:      size,
 		moves:     make([]Move, 0),
-		promptBad: false,
 		board:     make([]byte, size*size),
 		prevBoard: nil,
 		invalid:   false,
 	}
-	state.promptBuild.WriteString("board_size: ")
-	state.promptBuild.WriteString(strconv.Itoa(size))
-	state.promptBuild.WriteString("\n")
 	return state
 }
 
-func (b *BoardState) Prompt() (string, error) {
-	if b.promptBad {
-		return "", fmt.Errorf("invalid prompt state")
+func (b *BoardState) Prompt(nextPlayer string) (string, error) {
+	nextPlayer = strings.ToUpper(strings.TrimSpace(nextPlayer))
+	if nextPlayer != "B" && nextPlayer != "W" {
+		return "", fmt.Errorf("unknown player: %s", nextPlayer)
 	}
-	return b.promptBuild.String() + "move:", nil
+	var builder strings.Builder
+	builder.WriteString("board_size: ")
+	builder.WriteString(strconv.Itoa(b.size))
+	builder.WriteString("\n")
+	builder.WriteString("to_play: ")
+	builder.WriteString(nextPlayer)
+	builder.WriteString("\n")
+	builder.WriteString("board:\n")
+	for row := 0; row < b.size; row++ {
+		for col := 0; col < b.size; col++ {
+			switch b.board[row*b.size+col] {
+			case stoneBlack:
+				builder.WriteByte('X')
+			case stoneWhite:
+				builder.WriteByte('O')
+			default:
+				builder.WriteByte('.')
+			}
+		}
+		builder.WriteString("\n")
+	}
+	builder.WriteString("move:")
+	return builder.String(), nil
 }
 
 func (b *BoardState) ApplyMove(player string, move string, strict bool) error {
@@ -142,15 +159,6 @@ func (b *BoardState) applyStrict(player string, coords *Coord) error {
 
 func (b *BoardState) appendMove(player string, coords *Coord) {
 	b.moves = append(b.moves, Move{Player: player, Coords: coords})
-	gtp, err := coordsToGTP(coords, b.size)
-	if err != nil {
-		b.promptBad = true
-		return
-	}
-	b.promptBuild.WriteString(player)
-	b.promptBuild.WriteString(": ")
-	b.promptBuild.WriteString(gtp)
-	b.promptBuild.WriteString("\n")
 }
 
 func gtpToCoords(move string, boardSize int) (*Coord, error) {

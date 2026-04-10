@@ -31,7 +31,7 @@ class _BatchOnlyKataGo:
         self.batch_sizes.append(len(board_list))
         return [
             KataGoResult(
-                winrate=0.5 + (0.01 * len(board.moves)),
+                winrate=0.5 + (0.01 * len(board.stones())),
                 raw={"rootInfo": {"winrate": 0.5}},
             )
             for board in board_list
@@ -39,6 +39,25 @@ class _BatchOnlyKataGo:
 
     def analyze_position(self, _board):
         raise AssertionError("Expected batched analyze_positions path")
+
+
+PROMPT = "\n".join(
+    [
+        "board_size: 9",
+        "to_play: B",
+        "board:",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        "move:",
+    ]
+)
 
 
 def test_run_grpo_reward_deduplicates_base_and_candidate(monkeypatch):
@@ -55,9 +74,8 @@ def test_run_grpo_reward_deduplicates_base_and_candidate(monkeypatch):
         tokenizer=None,
     )
 
-    prompt = "board_size: 9\nmove:"
     rewards = reward_fn(
-        prompts=[prompt, prompt],
+        prompts=[PROMPT, PROMPT],
         completions=["D4", "D4"],
     )
 
@@ -79,9 +97,8 @@ def test_run_grpo_reward_skips_candidate_batch_for_illegal_moves(monkeypatch):
         tokenizer=None,
     )
 
-    prompt = "board_size: 9\nmove:"
     rewards = reward_fn(
-        prompts=[prompt, prompt],
+        prompts=[PROMPT, PROMPT],
         completions=["Z99", "Z99"],
     )
 
@@ -103,9 +120,8 @@ def test_run_grpo_reward_reasoning_prefixed_same_as_plain(monkeypatch):
         tokenizer=None,
     )
 
-    prompt = "board_size: 9\nmove:"
     rewards = reward_fn(
-        prompts=[prompt, prompt],
+        prompts=[PROMPT, PROMPT],
         completions=["D4", "<think>analysis</think> D4"],
     )
     assert rewards[0] == rewards[1]

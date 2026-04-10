@@ -63,7 +63,7 @@ def mock_katago_client(mock_katago_config, mock_katago_response):
     def mock_analyze(board: BoardState) -> KataGoResult:
         # Return different winrates based on move count for variety
         base_winrate = 0.5
-        move_bonus = len(board.moves) * 0.01
+        move_bonus = len(board.stones()) * 0.01
         winrate = min(0.95, base_winrate + move_bonus)
 
         return KataGoResult(

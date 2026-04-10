@@ -43,8 +43,12 @@ class _KataGoService(Protocol):
 
 def board_key(
     board: BoardState,
-) -> tuple[int, tuple[tuple[str, Optional[tuple[int, int]]], ...]]:
-    return (board.size, tuple((player.upper(), coords) for player, coords in board.moves))
+) -> tuple[int, str, tuple[tuple[int, ...], ...]]:
+    return (
+        board.size,
+        board.next_player(),
+        tuple(tuple(row) for row in board.current_board()),
+    )
 
 
 def _analyze_unique_positions(
@@ -176,7 +180,7 @@ def build_reward_fn(
                 entries.append(entry)
                 continue
 
-            candidate = BoardState(size=board.size, moves=list(board.moves))
+            candidate = board.clone()
             try:
                 candidate.apply_move(player, move)
             except Exception:

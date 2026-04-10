@@ -237,27 +237,36 @@ class KataGoAnalysisClient:
         return self._await_raw_result(req_id)
 
     def _build_payload(self, board: BoardState, req_id: int) -> Dict[str, object]:
-        return {
+        payload: Dict[str, object] = {
             "id": req_id,
             "boardXSize": board.size,
             "boardYSize": board.size,
             "rules": self.config.rules,
             "komi": self.config.komi,
-            "moves": [
+        }
+        if board.has_snapshot():
+            payload["initialStones"] = [
+                [player.lower(), coords_to_gtp(coords, board.size).lower()]
+                for player, coords in board.stones()
+            ]
+            payload["initialPlayer"] = board.next_player().lower()
+            payload["moves"] = []
+            return payload
+        payload["moves"] = [
                 [player.lower(), coords_to_gtp(coords, board.size).lower()]
                 if coords is not None
                 else [player.lower(), "pass"]
                 for player, coords in board.moves
-            ],
-        }
+            ]
+        return payload
 
     def submit_position(self, board: BoardState) -> int:
         req_id = self._next_request_id()
         payload = self._build_payload(board, req_id)
         logger.debug(
-            "Submitting position id=%d with %d moves",
+            "Submitting position id=%d with %d stones",
             req_id,
-            len(board.moves),
+            len(board.stones()),
         )
         self._submit_payload(payload)
         return req_id
@@ -302,7 +311,7 @@ class KataGoAnalysisClient:
         )
         candidate_boards: List[BoardState] = []
         for move in move_list:
-            candidate = BoardState(size=board.size, moves=list(board.moves))
+            candidate = board.clone()
             candidate.apply_move(move_player, move)
             candidate_boards.append(candidate)
         analyses = self.analyze_positions(candidate_boards)
@@ -316,7 +325,7 @@ class KataGoAnalysisClient:
         Falls back to PASS when no move is available or the suggested move is invalid.
         """
         move_player = player.strip().upper() if player else board.next_player()
-        analysis_board = BoardState(size=board.size, moves=list(board.moves))
+        analysis_board = board.clone()
         if analysis_board.next_player() != move_player:
             analysis_board.apply_move(analysis_board.next_player(), "PASS", strict=True)
 

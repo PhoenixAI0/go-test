@@ -32,12 +32,12 @@ class _DummyClient:
         _ = timeout
         board = self._submitted[req_id]
         return KataGoResult(
-            winrate=float(len(board.moves)),
+            winrate=float(len(board.stones())),
             raw={"id": req_id},
         )
 
     def analyze_position(self, board: BoardState) -> KataGoResult:
-        return KataGoResult(winrate=float(len(board.moves)), raw={"id": -1})
+        return KataGoResult(winrate=float(len(board.stones())), raw={"id": -1})
 
     def choose_move(self, board: BoardState, player: str | None = None) -> str:
         _ = board, player

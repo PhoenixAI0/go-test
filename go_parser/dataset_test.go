@@ -29,21 +29,25 @@ func TestSamplePositionsPromptIncludesSetup(t *testing.T) {
 	if samples[0].Response != "A1" {
 		t.Fatalf("expected response A1, got %s", samples[0].Response)
 	}
-	if !bytes.Contains([]byte(samples[0].Prompt), []byte("B: C3")) {
-		t.Fatalf("expected prompt to include setup stone B: C3")
+	if !bytes.Contains([]byte(samples[0].Prompt), []byte("..X..")) {
+		t.Fatalf("expected prompt to include setup stone at C3")
+	}
+	if !bytes.Contains([]byte(samples[0].Prompt), []byte("to_play: B")) {
+		t.Fatalf("expected prompt to include to_play header")
 	}
 }
 
 func TestWriteSampleJSON(t *testing.T) {
 	var buf bytes.Buffer
 	writer := bufio.NewWriter(&buf)
-	if err := writeSample(writer, Sample{Prompt: "board_size: 5\nmove:", Response: "A1", BoardSize: 5}); err != nil {
+	prompt := "board_size: 5\nto_play: B\nboard:\n.....\n.....\n.....\n.....\n.....\nmove:"
+	if err := writeSample(writer, Sample{Prompt: prompt, Response: "A1", BoardSize: 5}); err != nil {
 		t.Fatalf("writeSample: %v", err)
 	}
 	if err := writer.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	expected := "{\"prompt\": \"board_size: 5\\nmove:\", \"response\": \"A1\", \"board_size\": 5}\n"
+	expected := "{\"prompt\": \"board_size: 5\\nto_play: B\\nboard:\\n.....\\n.....\\n.....\\n.....\\n.....\\nmove:\", \"response\": \"A1\", \"board_size\": 5}\n"
 	if buf.String() != expected {
 		t.Fatalf("unexpected JSONL output: %s", buf.String())
 	}
@@ -107,8 +111,8 @@ func TestSamplePositionsStopsOnIllegalMove(t *testing.T) {
 	if samples[0].Response != "A5" || samples[1].Response != "A5" {
 		t.Fatalf("unexpected responses: %s, %s", samples[0].Response, samples[1].Response)
 	}
-	if !bytes.Contains([]byte(samples[1].Prompt), []byte("B: A5")) {
-		t.Fatalf("expected prompt to include prior move B: A5")
+	if !bytes.Contains([]byte(samples[1].Prompt), []byte("X....")) {
+		t.Fatalf("expected prompt to include prior move at A5")
 	}
 }
 

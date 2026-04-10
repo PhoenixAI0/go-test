@@ -25,7 +25,16 @@ def _load_script_module(filename: str, module_name: str):
 
 
 def _prompt(board_size: int = 19) -> str:
-    return f"board_size: {board_size}\nmove:"
+    rows = ["." * board_size for _ in range(board_size)]
+    return "\n".join(
+        [
+            f"board_size: {board_size}",
+            "to_play: B",
+            "board:",
+            *rows,
+            "move:",
+        ]
+    )
 
 
 class _NoopKataGo:
@@ -168,7 +177,33 @@ def test_fullgame_reward_fn_aligns_board_turn_to_model_color(monkeypatch):
         seed=789,
     )
 
-    prompt = "board_size: 19\nB: D4\nmove:"
+    prompt = "\n".join(
+        [
+            "board_size: 19",
+            "to_play: B",
+            "board:",
+            "...................",
+            "...................",
+            "...................",
+            "...................",
+            "...................",
+            "...................",
+            "...................",
+            "...................",
+            "...................",
+            "...................",
+            "...................",
+            "...................",
+            "...................",
+            "...................",
+            "...................",
+            "...X...............",
+            "...................",
+            "...................",
+            "...................",
+            "move:",
+        ]
+    )
     reward_fn(prompts=[prompt], completions=["Q16"])
     assert observed["model_color"] == "B"
     assert observed["next_player"] == "B"

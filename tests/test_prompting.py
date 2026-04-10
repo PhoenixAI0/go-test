@@ -11,9 +11,10 @@ def test_build_and_parse_prompt_roundtrip():
     prompt = build_prompt(board)
     parsed = parse_prompt(prompt)
     assert parsed.size == 5
-    assert parsed.moves == board.moves
+    assert parsed.next_player() == board.next_player()
+    assert parsed.current_board() == board.current_board()
 
 
 def test_parse_prompt_requires_header():
     with pytest.raises(ValueError):
-        parse_prompt("B: A1\nmove:")
+        parse_prompt("to_play: B\nboard:\n.....\n.....\n.....\n.....\n.....\nmove:")

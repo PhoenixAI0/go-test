@@ -6,8 +6,40 @@ from go_rl.data_prep import build_sft_dataset
 def test_build_sft_dataset_invokes_go_parser(tmp_path, monkeypatch):
     output_path = tmp_path / "data" / "sft.jsonl"
     written = [
-        {"prompt": "board_size: 5\nmove:", "response": "A1", "board_size": 5},
-        {"prompt": "board_size: 5\nB: A1\nmove:", "response": "PASS", "board_size": 5},
+        {
+            "prompt": "\n".join(
+                [
+                    "board_size: 5",
+                    "to_play: B",
+                    "board:",
+                    ".....",
+                    ".....",
+                    ".....",
+                    ".....",
+                    ".....",
+                    "move:",
+                ]
+            ),
+            "response": "A1",
+            "board_size": 5,
+        },
+        {
+            "prompt": "\n".join(
+                [
+                    "board_size: 5",
+                    "to_play: W",
+                    "board:",
+                    ".....",
+                    ".....",
+                    ".....",
+                    ".....",
+                    "X....",
+                    "move:",
+                ]
+            ),
+            "response": "PASS",
+            "board_size": 5,
+        },
     ]
 
     def fake_run_go_parser(sgf_dir, output_path, max_positions, num_workers):

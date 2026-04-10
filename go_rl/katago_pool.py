@@ -75,7 +75,7 @@ class KataGoPool:
         move_list = list(moves)
         candidates: List[BoardState] = []
         for move in move_list:
-            candidate = BoardState(size=board.size, moves=list(board.moves))
+            candidate = board.clone()
             candidate.apply_move(move_player, move)
             candidates.append(candidate)
         analyses = self.analyze_positions(candidates)

@@ -37,11 +37,30 @@ class _Tokenizer:
         return "".join(chr(i) for i in ids)
 
 
+PROMPT = "\n".join(
+    [
+        "board_size: 9",
+        "to_play: B",
+        "board:",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        "move:",
+    ]
+)
+
+
 def test_sft_reasoning_completion_mask_masks_thinking_tokens():
     module = _load_script_module("run_sft.py", "run_sft_reasoning_mask_module")
     tokenizer = _Tokenizer()
     sample = module._convert_to_messages(
-        {"prompt": "board_size: 9\nmove:", "response": "<think>analysis</think> D4"},
+        {"prompt": PROMPT, "response": "<think>analysis</think> D4"},
         eos_token="",
     )
 
@@ -54,7 +73,7 @@ def test_sft_reasoning_completion_mask_masks_thinking_tokens():
         optimize_final_only=True,
         chat_template_kwargs={},
     )
-    prompt_len = len("board_size: 9\nmove:")
+    prompt_len = len(PROMPT)
     completion_mask = processed["completion_mask"][prompt_len:]
     assert completion_mask[-2:] == [1, 1]
     assert all(v == 0 for v in completion_mask[:-2])
@@ -64,7 +83,7 @@ def test_sft_reasoning_disabled_keeps_full_completion_mask():
     module = _load_script_module("run_sft.py", "run_sft_reasoning_mask_disabled_module")
     tokenizer = _Tokenizer()
     sample = module._convert_to_messages(
-        {"prompt": "board_size: 9\nmove:", "response": "<think>analysis</think> D4"},
+        {"prompt": PROMPT, "response": "<think>analysis</think> D4"},
         eos_token="",
     )
 
@@ -77,6 +96,6 @@ def test_sft_reasoning_disabled_keeps_full_completion_mask():
         optimize_final_only=True,
         chat_template_kwargs={},
     )
-    prompt_len = len("board_size: 9\nmove:")
+    prompt_len = len(PROMPT)
     completion_mask = processed["completion_mask"][prompt_len:]
     assert all(v == 1 for v in completion_mask)

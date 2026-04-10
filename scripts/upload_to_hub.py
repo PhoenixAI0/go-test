@@ -309,10 +309,33 @@ model = AutoModelForCausalLM.from_pretrained("{repo_id}")
 tokenizer = AutoTokenizer.from_pretrained("{repo_id}")
 
 # Generate move
-prompt = "Board: 9x9\\nBlack to play\\n"
-inputs = tokenizer(prompt, return_tensors="pt")
+prompt = \"\"\"board_size: 9
+to_play: B
+board:
+.........
+.........
+.........
+.........
+.........
+.........
+.........
+.........
+.........
+move:\"\"\"
+messages = [{{"role": "user", "content": prompt}}]
+if hasattr(tokenizer, "apply_chat_template"):
+    inputs = tokenizer.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        return_dict=True,
+    )
+else:
+    inputs = tokenizer(prompt, return_tensors="pt")
 outputs = model.generate(**inputs, max_new_tokens=10)
-move = tokenizer.decode(outputs[0], skip_special_tokens=True)
+prompt_len = int(inputs["input_ids"].shape[-1])
+move = tokenizer.decode(outputs[0][prompt_len:], skip_special_tokens=True)
 ```
 
 {f'''
