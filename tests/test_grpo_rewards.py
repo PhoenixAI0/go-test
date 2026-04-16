@@ -6,8 +6,6 @@ properly with KataGo analysis.
 
 from __future__ import annotations
 
-import pytest
-
 from go_rl.board import BoardState
 from go_rl.config import RewardConfig
 from go_rl.rewards import (

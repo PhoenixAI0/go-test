@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import InitVar, dataclass, field
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Optional, TypeVar
+
+_ConfigT = TypeVar("_ConfigT")
+
+VALID_QUANTIZATION_BITS = (0, 4, 8, 16, 32)
 
 
 def _expand_path(value: str, base_dir: Optional[str] = None) -> str:
@@ -89,11 +94,7 @@ class RewardConfig:
     terminal_outcome_bonus: float = 1.0
     illegal_move_ends_game: bool = True
     strict_legality: bool = False
-    # Legality checking level: "basic", "ko", or "superko"
-    # If not specified, uses strict_legality flag for backward compatibility
-    # "basic" = only check position occupancy
-    # "ko" = check simple ko (immediate recapture forbidden)
-    # "superko" = check positional superko (any position repeat forbidden)
+    # Legality checking: basic (occupancy), ko (simple ko), or superko (positional repeat).
     legality_level: Optional[str] = None
 
 
@@ -148,9 +149,9 @@ class TrainingConfig:
         self.log_dir = _expand_path(self.log_dir)
         if isinstance(self.reasoning, dict):
             self.reasoning = ReasoningConfig(**self.reasoning)
-        if self.quantization_bits not in (0, 4, 8, 16, 32):
+        if self.quantization_bits not in VALID_QUANTIZATION_BITS:
             raise ValueError(
-                "quantization_bits must be one of 0, 4, 8, 16, or 32."
+                f"quantization_bits must be one of {', '.join(map(str, VALID_QUANTIZATION_BITS))}."
             )
 
 
@@ -181,9 +182,9 @@ class SftConfig:
         self.log_dir = _expand_path(self.log_dir)
         if isinstance(self.reasoning, dict):
             self.reasoning = ReasoningConfig(**self.reasoning)
-        if self.quantization_bits not in (0, 4, 8, 16, 32):
+        if self.quantization_bits not in VALID_QUANTIZATION_BITS:
             raise ValueError(
-                "quantization_bits must be one of 0, 4, 8, 16, or 32."
+                f"quantization_bits must be one of {', '.join(map(str, VALID_QUANTIZATION_BITS))}."
             )
         if self.eval_split_ratio < 0.0 or self.eval_split_ratio >= 1.0:
             raise ValueError("eval_split_ratio must be in [0.0, 1.0).")
@@ -191,11 +192,14 @@ class SftConfig:
             raise ValueError("eval_steps must be >= 1.")
 
 
-def _load_yaml(path: str) -> Dict[str, Any]:
+def load_yaml_mapping(
+    path: str,
+    missing_dependency_message: str = "PyYAML is required to load config files.",
+) -> dict[str, object]:
     try:
         import yaml
     except ImportError as exc:  # pragma: no cover - optional dependency
-        raise RuntimeError("PyYAML is required to load config files.") from exc
+        raise RuntimeError(missing_dependency_message) from exc
 
     with open(path, "r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle)
@@ -204,9 +208,19 @@ def _load_yaml(path: str) -> Dict[str, Any]:
     return data
 
 
-def load_config(path: str, cls: type) -> Any:
-    data = _load_yaml(path)
+def resolve_config_base_dir(path: str) -> str:
+    return str(Path(os.path.expandvars(os.path.expanduser(path))).resolve().parent)
+
+
+def run_name_for_config(prefix: str, config_path: str) -> str:
+    return f"{prefix}_{Path(config_path).stem}"
+
+
+def load_config(path: str, cls: type[_ConfigT]) -> _ConfigT:
+    data = load_yaml_mapping(path)
     if cls is KataGoConfig:
-        config_base_dir = os.path.dirname(os.path.abspath(path))
-        return cls(config_base_dir=config_base_dir, **data)
+        return cls(config_base_dir=resolve_config_base_dir(path), **data)
     return cls(**data)
+
+
+_load_yaml = load_yaml_mapping

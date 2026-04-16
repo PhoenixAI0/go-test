@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Optional
+from collections.abc import Mapping
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,7 @@ def configure_wandb(
     project: Optional[str] = None,
     entity: Optional[str] = None,
     mode: Optional[str] = None,
-    config: Optional[Dict[str, Any]] = None,
+    config: Mapping[str, object] | None = None,
     tags: Optional[list[str]] = None,
     notes: Optional[str] = None,
 ) -> bool:
@@ -38,7 +39,7 @@ def configure_wandb(
 
     try:
         gpu_info = get_gpu_info()
-        full_config = config or {}
+        full_config = dict(config or {})
         if gpu_info:
             full_config["gpu"] = gpu_info
 
@@ -70,7 +71,7 @@ def configure_wandb(
 
 def log_training_metrics(
     step: int,
-    metrics: Dict[str, Any],
+    metrics: Mapping[str, object],
     commit: bool = True,
 ) -> None:
     try:
@@ -82,6 +83,29 @@ def log_training_metrics(
         pass
     except Exception as exc:
         logger.debug("Failed to log metrics to wandb: %s", exc)
+
+
+def log_prefixed_history(
+    log_history: list[dict[str, object]],
+    wandb_enabled: bool,
+    metric_prefix: str,
+) -> None:
+    if not wandb_enabled:
+        return
+    for entry in log_history:
+        step = entry.get("step")
+        if step is None:
+            continue
+        metrics: dict[str, float] = {}
+        for key, value in entry.items():
+            if key == "step":
+                continue
+            if "reward" in key.lower():
+                metrics[f"{metric_prefix}{key}"] = float(value)
+        if "loss" in entry:
+            metrics[f"{metric_prefix}loss"] = float(entry["loss"])
+        if metrics:
+            log_training_metrics(step=int(step), metrics=metrics, commit=False)
 
 
 def log_system_metrics() -> None:
@@ -101,7 +125,7 @@ def log_system_metrics() -> None:
         logger.debug("Failed to log system metrics: %s", exc)
 
 
-def get_gpu_info() -> Optional[Dict[str, Any]]:
+def get_gpu_info() -> dict[str, object] | None:
     try:
         import torch
 
@@ -124,7 +148,7 @@ def get_gpu_info() -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_gpu_metrics() -> Optional[Dict[str, float]]:
+def get_gpu_metrics() -> dict[str, float] | None:
     try:
         import torch
 

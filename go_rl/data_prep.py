@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -111,18 +113,19 @@ def run_go_parser(
         return sum(1 for line in handle if line.strip())
 
 
+def write_jsonl_batch(handle, records: Iterable[dict]) -> None:
+    batch = list(records)
+    if not batch:
+        return
+    handle.writelines(json.dumps(record) + "\n" for record in batch)
+
+
 def build_sft_dataset(
     sgf_dir: str,
     output_path: str,
     max_positions: int,
     num_workers: int = 0,
-    use_parallel: bool = True,
-    batch_size: int = 1000,
 ) -> int:
-    if not use_parallel:
-        logger.warning("--no-parallel is deprecated; Go parser parallelism is always managed by --num-workers.")
-    if batch_size != 1000:
-        logger.warning("batch_size is ignored when using the Go parser path.")
     logger.info("Building dataset from SGFs with Go parser: %s", sgf_dir)
     count = run_go_parser(
         sgf_dir=sgf_dir,

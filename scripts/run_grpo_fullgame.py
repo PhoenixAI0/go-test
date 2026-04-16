@@ -7,15 +7,19 @@ import random
 from collections import OrderedDict
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Protocol
+from typing import Callable, Optional
 
 from go_rl.board import BoardState
 from go_rl.config import (
     FullGameConfig,
     KataGoConfig,
+    ReasoningConfig,
     RewardConfig,
     RolloutConfig,
     TrainingConfig,
+    load_yaml_mapping,
+    resolve_config_base_dir,
+    run_name_for_config,
 )
 from go_rl.fullgame_rollout import (
     align_board_to_player_turn,
@@ -27,41 +31,23 @@ from go_rl.katago_pool import build_katago_service
 from go_rl.logging_utils import setup_logging
 from go_rl.prompting import parse_prompt
 from go_rl.run_logging import write_run_log
+from go_rl.shared_types import BoardKey, KataGoService
 from go_rl.training_utils import (
     configure_torch_for_speed,
     default_num_workers,
+    get_distributed_context,
     get_optimal_attention_backend,
     quantization_kwargs,
 )
 from go_rl.wandb_utils import (
     configure_wandb,
     finish_wandb,
+    log_prefixed_history,
     log_system_metrics,
-    log_training_metrics,
 )
 from venv_utils import ensure_virtualenv
 
 logger = logging.getLogger(__name__)
-
-
-class _KataGoService(Protocol):
-    def start(self) -> None: ...
-    def close(self) -> None: ...
-    def analyze_position(self, board: BoardState) -> KataGoResult: ...
-    def analyze_positions(self, boards: Iterable[BoardState]) -> List[KataGoResult]: ...
-    def choose_move(self, board: BoardState, player: str | None = None) -> str: ...
-
-
-def load_yaml(path: str) -> Dict[str, object]:
-    try:
-        import yaml
-    except ImportError as exc:
-        raise RuntimeError("PyYAML is required for GRPO config loading.") from exc
-    with open(path, "r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
-    if not isinstance(data, dict):
-        raise ValueError("Config must be a mapping")
-    return data
 
 
 def _truncate_seed_board(board: BoardState, max_seed_prefix_moves: int) -> BoardState:
@@ -83,14 +69,14 @@ def _build_seed_board(prompt: str, full_cfg: FullGameConfig, rng: random.Random)
 def build_fullgame_reward_fn(
     model: object,
     tokenizer: object,
-    katago: _KataGoService,
+    katago: KataGoService,
     reward_cfg: RewardConfig,
     rollout_cfg: RolloutConfig,
     full_cfg: FullGameConfig,
     seed: int,
-    reasoning_cfg: object | None = None,
+    reasoning_cfg: ReasoningConfig | None = None,
     model_name: str = "",
-) -> callable:
+) -> Callable[..., list[float]]:
     state = {
         "episode_index": 0,
         "truncated": 0,
@@ -98,11 +84,11 @@ def build_fullgame_reward_fn(
         "fallback_passes": 0,
     }
     rng = random.Random(seed)
-    analysis_cache: OrderedDict[tuple, KataGoResult] = OrderedDict()
+    analysis_cache: OrderedDict[BoardKey, KataGoResult] = OrderedDict()
     analysis_cache_max_size = 4096
 
-    def reward_fn(prompts: List[str], completions: List[str], **_: object) -> List[float]:
-        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    def reward_fn(prompts: list[str], completions: list[str], **_: object) -> list[float]:
+        local_rank, _, _ = get_distributed_context()
         if local_rank != 0:
             raise RuntimeError(
                 f"Reward function called on non-main process (rank {local_rank}). "
@@ -115,11 +101,11 @@ def build_fullgame_reward_fn(
                 "Ensure KataGo client is started before creating the reward function."
             )
 
-        rewards: List[float] = []
+        rewards: list[float] = []
         for prompt, completion in zip(prompts, completions):
             try:
                 board = _build_seed_board(prompt, full_cfg, rng)
-            except Exception:
+            except ValueError:
                 logger.debug("Failed to parse seed prompt", exc_info=True)
                 rewards.append(float(reward_cfg.illegal_penalty))
                 continue
@@ -132,31 +118,27 @@ def build_fullgame_reward_fn(
             state["episode_index"] += 1
             episode_board = align_board_to_player_turn(board, model_color)
 
-            try:
-                result = simulate_full_game(
-                    board=episode_board,
-                    initial_completion=completion,
-                    model=model,
-                    tokenizer=tokenizer,
-                    katago=katago,
-                    reward_cfg=reward_cfg,
-                    rollout_cfg=rollout_cfg,
-                    fullgame_cfg=full_cfg,
-                    model_color=model_color,
-                    reasoning_cfg=reasoning_cfg,
-                    reasoning_model_name=model_name,
-                    analysis_cache=analysis_cache,
-                    max_cache_size=analysis_cache_max_size,
-                )
-                rewards.append(float(result.total_reward))
-                if result.truncated:
-                    state["truncated"] += 1
-                if result.terminated_by_illegal:
-                    state["illegal"] += 1
-                state["fallback_passes"] += result.katago_fallback_passes
-            except Exception:
-                logger.debug("Full-game rollout failed", exc_info=True)
-                rewards.append(float(reward_cfg.illegal_penalty))
+            result = simulate_full_game(
+                board=episode_board,
+                initial_completion=completion,
+                model=model,
+                tokenizer=tokenizer,
+                katago=katago,
+                reward_cfg=reward_cfg,
+                rollout_cfg=rollout_cfg,
+                fullgame_cfg=full_cfg,
+                model_color=model_color,
+                reasoning_cfg=reasoning_cfg,
+                reasoning_model_name=model_name,
+                analysis_cache=analysis_cache,
+                max_cache_size=analysis_cache_max_size,
+            )
+            rewards.append(float(result.total_reward))
+            if result.truncated:
+                state["truncated"] += 1
+            if result.terminated_by_illegal:
+                state["illegal"] += 1
+            state["fallback_passes"] += result.katago_fallback_passes
 
         total_episodes = state["episode_index"]
         if total_episodes and total_episodes % 50 == 0:
@@ -170,25 +152,6 @@ def build_fullgame_reward_fn(
         return rewards
 
     return reward_fn
-
-
-def _log_grpo_reward_history(log_history: list[dict], wandb_enabled: bool) -> None:
-    if not wandb_enabled:
-        return
-    for entry in log_history:
-        step = entry.get("step")
-        if step is None:
-            continue
-        metrics: Dict[str, float] = {}
-        for key, value in entry.items():
-            if key == "step":
-                continue
-            if "reward" in key.lower():
-                metrics[f"grpo_fullgame/{key}"] = float(value)
-        if "loss" in entry:
-            metrics["grpo_fullgame/loss"] = float(entry["loss"])
-        if metrics:
-            log_training_metrics(step=int(step), metrics=metrics, commit=False)
 
 
 def main() -> None:
@@ -253,8 +216,11 @@ def main() -> None:
 
     setup_logging(args.log_level)
     logger.info("Loading full-game GRPO config from %s", args.config)
-    cfg = load_yaml(args.config)
-    config_base_dir = str(Path(os.path.expandvars(os.path.expanduser(args.config))).resolve().parent)
+    cfg = load_yaml_mapping(
+        args.config,
+        "PyYAML is required for GRPO config loading.",
+    )
+    config_base_dir = resolve_config_base_dir(args.config)
 
     train_cfg = TrainingConfig(**cfg["training"])
     katago_cfg = KataGoConfig(config_base_dir=config_base_dir, **cfg["katago"])
@@ -303,7 +269,7 @@ def main() -> None:
         attention_backend=attention_backend,
     )
 
-    run_name = f"grpo_fullgame_{Path(args.config).stem}"
+    run_name = run_name_for_config("grpo_fullgame", args.config)
     quant_type = (
         "fp8"
         if args.use_fp8
@@ -395,14 +361,12 @@ def main() -> None:
         dataset = dataset.select(range(smoke_count))
     logger.info("Dataset rows: %d", len(dataset))
 
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    world_size = int(os.environ.get("WORLD_SIZE", "1"))
-    is_main_process = local_rank == 0
+    local_rank, world_size, is_main_process = get_distributed_context()
 
     if world_size > 1:
         logger.info("Multi-GPU training detected: rank %d of %d", local_rank, world_size)
 
-    katago: Optional[_KataGoService] = None
+    katago: Optional[KataGoService] = None
     try:
         if is_main_process:
             katago = build_katago_service(katago_cfg)
@@ -503,9 +467,10 @@ def main() -> None:
             trainer.train()
             logger.info("Full-game GRPO training completed successfully")
             if is_main_process:
-                _log_grpo_reward_history(
+                log_prefixed_history(
                     trainer.state.log_history,
-                    wandb_enabled=wandb_enabled,
+                    wandb_enabled,
+                    "grpo_fullgame/",
                 )
         finally:
             if wandb_enabled and is_main_process:

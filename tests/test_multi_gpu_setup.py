@@ -7,9 +7,7 @@ and that rank-sensitive operations (like reward computation) are handled properl
 from __future__ import annotations
 
 import os
-from unittest.mock import Mock, patch
-
-import pytest
+from unittest.mock import patch
 
 
 class TestMultiGPUConfiguration:

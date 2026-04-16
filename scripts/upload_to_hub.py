@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-"""Upload trained model to HuggingFace Hub.
-
-This script merges LoRA weights into the base model and uploads to HuggingFace Hub
-for easy sharing and deployment.
-"""
+"""Upload trained models or LoRA adapters to HuggingFace Hub."""
 
 from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
 import sys
 from pathlib import Path
 
@@ -54,7 +51,7 @@ Prerequisites:
         "--model",
         "-m",
         required=True,
-        help="Path to trained model checkpoint (LoRA adapter directory)",
+        help="Path to trained model checkpoint or LoRA adapter directory",
     )
     parser.add_argument(
         "--repo-id",
@@ -80,19 +77,11 @@ Prerequisites:
         help="Create private repository",
     )
     parser.add_argument(
-        "--merge-and-upload",
-        action="store_true",
-        help="Merge LoRA into base model before uploading",
-    )
-    parser.add_argument(
         "--push-only",
         action="store_true",
-        help="Only push (don't merge), useful for LoRA adapters",
+        help="Required when uploading a LoRA adapter",
     )
-    parser.add_argument(
-        "--model-card",
-        help="Path to custom README.md for model card",
-    )
+    parser.add_argument("--model-card", help="Path to custom README.md for model card")
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -125,7 +114,7 @@ Prerequisites:
         logger.info("Installing missing packages with uv (project sync is preferred: uv sync --extra upload)...")
         try:
             uv_pip_install(["huggingface_hub", "transformers"])
-        except Exception as install_error:
+        except subprocess.CalledProcessError as install_error:
             logger.error(f"Dependency install failed: {install_error}")
             return 1
         from huggingface_hub import HfApi, create_repo
@@ -145,13 +134,16 @@ Prerequisites:
         return 1
 
     # Handle LoRA adapter upload
-    if is_lora and args.push_only:
+    if is_lora:
+        if not args.push_only:
+            logger.error("LoRA adapters must be uploaded with --push-only.")
+            return 1
+
         logger.info("Uploading LoRA adapter (push-only mode)")
 
         try:
             api = HfApi()
 
-            # Upload adapter files
             logger.info("Uploading adapter files...")
             api.upload_folder(
                 folder_path=str(model_path),
@@ -159,7 +151,6 @@ Prerequisites:
                 repo_type="model",
             )
 
-            # Generate and upload model card
             model_card = generate_model_card(
                 args.repo_id,
                 args.base_model,
@@ -183,27 +174,6 @@ Prerequisites:
 
         except Exception as e:
             logger.error(f"Upload failed: {e}")
-            return 1
-
-    # Merge LoRA and upload
-    if is_lora and args.merge_and_upload:
-        logger.info("Merging LoRA weights into base model...")
-
-        try:
-            # This is a placeholder - actual implementation would:
-            # 1. Load base model
-            # 2. Load LoRA adapter
-            # 3. Merge weights
-            # 4. Save merged model
-            # 5. Upload to Hub
-
-            logger.error("Merge and upload not fully implemented yet")
-            logger.error("Use --push-only to upload LoRA adapter directly")
-            logger.error("Or merge manually using unsloth's merge_and_unload()")
-            return 1
-
-        except Exception as e:
-            logger.error(f"Merge failed: {e}")
             return 1
 
     # Upload full model

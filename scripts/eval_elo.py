@@ -32,7 +32,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Optional, TypedDict
 
 from go_rl.wandb_utils import configure_wandb, finish_wandb, log_training_metrics
 from venv_utils import ensure_virtualenv
@@ -43,9 +43,25 @@ _BLACK_PATTERN = re.compile(r"PB\[([^\]]*)\]")
 _WHITE_PATTERN = re.compile(r"PW\[([^\]]*)\]")
 
 
-def _snapshot_sgf_files(sgf_dir: Path) -> Dict[str, tuple[int, int, int]]:
+class MatchSummary(TypedDict):
+    model_name: str
+    katago_name: str | None
+    total_sgf_files: int
+    scanned_sgf_files: int
+    stale_sgf_files_ignored: int
+    identified_games: int
+    wins: int
+    losses: int
+    draws: int
+    skipped_games: int
+    win_rate: float
+    score_rate: float
+    elo_delta: float
+
+
+def _snapshot_sgf_files(sgf_dir: Path) -> dict[str, tuple[int, int, int]]:
     """Capture SGF file signatures for stale-file filtering."""
-    file_stats: Dict[str, tuple[int, int, int]] = {}
+    file_stats: dict[str, tuple[int, int, int]] = {}
     for sgf_file in sgf_dir.glob("*.sgf"):
         try:
             stat = sgf_file.stat()
@@ -63,7 +79,7 @@ def _parse_match_config_player_name(match_config_path: str) -> Optional[str]:
     """Extract player1 name from a KataGo match config."""
     try:
         content = Path(match_config_path).read_text(encoding="utf-8")
-    except Exception:
+    except (OSError, UnicodeDecodeError):
         return None
     match = re.search(
         r"player1\s*=\s*\{[^}]*?\bname\s*=\s*([^\n\r]+)",
@@ -95,9 +111,9 @@ def _safe_elo_from_score(score_rate: float) -> float:
 def summarize_match_results(
     sgf_dir: str,
     model_name: str,
-    katago_name: Optional[str] = None,
-    baseline_sgf_stats: Optional[Dict[str, tuple[int, int, int]]] = None,
-) -> Dict[str, Any]:
+    katago_name: str | None = None,
+    baseline_sgf_stats: dict[str, tuple[int, int, int]] | None = None,
+) -> MatchSummary:
     sgf_path = Path(sgf_dir)
     all_sgf_files = sorted(sgf_path.glob("*.sgf"))
     if baseline_sgf_stats is None:
@@ -266,7 +282,6 @@ For more information, see docs/EVALUATION_GUIDE.md
     )
     args = parser.parse_args()
 
-    # Validate inputs
     katago_bin = os.path.expanduser(os.path.expandvars(args.katago_bin))
     match_config = os.path.expanduser(os.path.expandvars(args.match_config))
 
@@ -282,7 +297,6 @@ For more information, see docs/EVALUATION_GUIDE.md
         print("  2. Edit a template from config/katago_match_*.cfg", file=sys.stderr)
         sys.exit(1)
 
-    # Check for placeholder paths in config
     with open(match_config, "r", encoding="utf-8") as f:
         config_content = f.read()
         if "/path/to/" in config_content or "${" in config_content:
@@ -290,7 +304,6 @@ For more information, see docs/EVALUATION_GUIDE.md
             print("Please edit the config and replace placeholders with actual paths", file=sys.stderr)
             print("", file=sys.stderr)
 
-    # Create output directories
     log_dir = os.path.dirname(args.log_file)
     if log_dir and not os.path.exists(log_dir):
         os.makedirs(log_dir, exist_ok=True)
@@ -322,7 +335,6 @@ For more information, see docs/EVALUATION_GUIDE.md
         tags=["eval", "katago-match"],
     )
 
-    # Build command
     cmd = [
         katago_bin,
         "match",

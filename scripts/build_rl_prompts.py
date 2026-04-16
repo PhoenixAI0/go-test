@@ -3,27 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 from pathlib import Path
 from typing import List
 
+from go_rl.data_prep import run_go_parser, write_jsonl_batch
 from go_rl.logging_utils import setup_logging
-from venv_utils import ensure_virtualenv, run_go_parser
+from venv_utils import ensure_virtualenv
 
 logger = logging.getLogger(__name__)
-
-
-def _resolve_num_workers(requested: int) -> int:
-    if requested and requested > 0:
-        return requested
-    cpu_count = os.cpu_count() or 1
-    return max(1, cpu_count - 1)
-
-
-def _write_jsonl_batch(handle, records: List[dict]) -> None:
-    if not records:
-        return
-    handle.writelines(json.dumps(record) + "\n" for record in records)
 
 
 def main() -> None:
@@ -58,7 +45,6 @@ def main() -> None:
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    num_workers = _resolve_num_workers(args.num_workers)
     count = 0
     batch: List[dict] = []
 
@@ -69,7 +55,7 @@ def main() -> None:
             sgf_dir=args.sgf_dir,
             output_path=str(go_parser_output),
             max_positions=args.max_positions,
-            num_workers=num_workers,
+            num_workers=args.num_workers,
         )
 
         with go_parser_output.open("r", encoding="utf-8") as src:
@@ -81,7 +67,7 @@ def main() -> None:
                 count += 1
 
                 if len(batch) >= args.batch_size:
-                    _write_jsonl_batch(handle, batch)
+                    write_jsonl_batch(handle, batch)
                     batch = []
 
                     if count % 10000 == 0:
@@ -89,7 +75,7 @@ def main() -> None:
         go_parser_output.unlink(missing_ok=True)
 
         if batch:
-            _write_jsonl_batch(handle, batch)
+            write_jsonl_batch(handle, batch)
 
     logger.info("Wrote %d prompts to %s", count, args.output)
 

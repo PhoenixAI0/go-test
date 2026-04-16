@@ -119,9 +119,6 @@ maxVisits = 100
 maxPlayouts = 300
 EOF
 
-# Backward-compatible alias expected by older scripts.
-cp "${KATAGO_DIR}/analysis_eval.cfg" "${KATAGO_DIR}/analysis.cfg"
-
 # Create .env file for KataGo paths
 cat > .env << EOF
 # KataGo Configuration

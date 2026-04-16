@@ -1,8 +1,6 @@
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from go_rl.run_logging import (
     _gpu_info,
     _package_version,
@@ -99,7 +97,7 @@ def test_gpu_info_mps_exception():
     """Test _gpu_info when MPS check raises an exception."""
     mock_torch = MagicMock()
     mock_torch.cuda.is_available.return_value = False
-    mock_torch.backends.mps.is_built.side_effect = Exception("MPS error")
+    mock_torch.backends.mps.is_built.side_effect = RuntimeError("MPS error")
     mock_torch.version.cuda = None
 
     with patch.dict("sys.modules", {"torch": mock_torch}):
@@ -261,7 +259,7 @@ def test_write_run_log_creates_directory(tmp_path):
         mock_env.return_value = {"python": "3.12.0"}
         mock_datetime.utcnow.return_value.strftime.return_value = "20260130_120000"
 
-        log_path = write_run_log(str(log_dir), "test_run", "/config/test.yaml", {})
+        write_run_log(str(log_dir), "test_run", "/config/test.yaml", {})
 
     assert log_dir.exists()
     assert (log_dir / "test_run_20260130_120000.json").exists()

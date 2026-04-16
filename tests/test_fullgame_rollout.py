@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import pytest
@@ -215,7 +216,7 @@ def test_simulate_full_game_analysis_cache_reuses_final_position():
 
     board = BoardState.empty(19)
     katago = _CountingKataGo()
-    cache: dict[tuple, KataGoResult] = {}
+    cache: OrderedDict[tuple, KataGoResult] = OrderedDict()
     result = simulate_full_game(
         board=board,
         initial_completion="D4",
@@ -234,7 +235,7 @@ def test_simulate_full_game_analysis_cache_reuses_final_position():
     assert katago.calls == 2
 
 
-def test_simulate_full_game_analysis_cache_plain_dict_handles_eviction():
+def test_simulate_full_game_analysis_cache_ordered_dict_handles_eviction():
     class _CountingKataGo(_StubKataGo):
         def __init__(self):
             super().__init__(score_lead=0.0, move="PASS")
@@ -246,7 +247,7 @@ def test_simulate_full_game_analysis_cache_plain_dict_handles_eviction():
 
     board = BoardState.empty(19)
     katago = _CountingKataGo()
-    cache: dict[tuple, KataGoResult] = {}
+    cache: OrderedDict[tuple, KataGoResult] = OrderedDict()
     result = simulate_full_game(
         board=board,
         initial_completion="D4",

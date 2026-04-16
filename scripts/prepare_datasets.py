@@ -3,27 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 from pathlib import Path
 from typing import List
 
+from go_rl.data_prep import run_go_parser, write_jsonl_batch
 from go_rl.logging_utils import setup_logging
-from venv_utils import ensure_virtualenv, run_go_parser
+from venv_utils import ensure_virtualenv
 
 logger = logging.getLogger(__name__)
-
-
-def _write_jsonl_batch(handle, records: List[dict]) -> None:
-    if not records:
-        return
-    handle.writelines(json.dumps(record) + "\n" for record in records)
-
-
-def _resolve_num_workers(requested: int) -> int:
-    if requested and requested > 0:
-        return requested
-    cpu_count = os.cpu_count() or 1
-    return max(1, cpu_count - 1)
 
 
 def main() -> None:
@@ -63,7 +50,6 @@ def main() -> None:
     sft_path.parent.mkdir(parents=True, exist_ok=True)
     rl_path.parent.mkdir(parents=True, exist_ok=True)
 
-    num_workers = _resolve_num_workers(args.num_workers)
     count = 0
     sft_batch: List[dict] = []
     rl_batch: List[dict] = []
@@ -74,7 +60,7 @@ def main() -> None:
         sgf_dir=args.sgf_dir,
         output_path=str(go_parser_output),
         max_positions=args.max_positions,
-        num_workers=num_workers,
+        num_workers=args.num_workers,
     )
 
     with (
@@ -99,8 +85,8 @@ def main() -> None:
                 count += 1
 
                 if len(sft_batch) >= args.batch_size:
-                    _write_jsonl_batch(sft_handle, sft_batch)
-                    _write_jsonl_batch(rl_handle, rl_batch)
+                    write_jsonl_batch(sft_handle, sft_batch)
+                    write_jsonl_batch(rl_handle, rl_batch)
                     sft_batch = []
                     rl_batch = []
 
@@ -108,8 +94,8 @@ def main() -> None:
                         logger.info("Written %d samples...", count)
 
         if sft_batch:
-            _write_jsonl_batch(sft_handle, sft_batch)
-            _write_jsonl_batch(rl_handle, rl_batch)
+            write_jsonl_batch(sft_handle, sft_batch)
+            write_jsonl_batch(rl_handle, rl_batch)
 
     if go_parser_output.exists():
         go_parser_output.unlink()

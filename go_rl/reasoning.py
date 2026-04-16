@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import asdict, is_dataclass
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from collections.abc import Iterable, Mapping, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -12,9 +12,9 @@ _QWEN_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _QWEN_THINK_END = re.compile(r"</think>", re.IGNORECASE)
 
 
-def _keyword_profiles(text: str) -> List[str]:
+def _keyword_profiles(text: str) -> list[str]:
     lowered = text.lower()
-    matches: List[str] = []
+    matches: list[str] = []
     if "gpt-oss" in lowered or "gpt_oss" in lowered:
         matches.append("gpt_oss")
     if "glm" in lowered or "z.ai" in lowered or "zai" in lowered:
@@ -75,15 +75,15 @@ def detect_reasoning_profile(
     return "plain"
 
 
-def _to_plain_text(value: Any) -> str:
+def _to_plain_text(value: object) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
         return value
     if is_dataclass(value):
         return _to_plain_text(asdict(value))
-    if isinstance(value, dict):
-        parts: List[str] = []
+    if isinstance(value, Mapping):
+        parts: list[str] = []
         for key in ("final", "content", "text", "output_text", "message"):
             if key in value:
                 parts.append(_to_plain_text(value[key]))
@@ -95,7 +95,7 @@ def _to_plain_text(value: Any) -> str:
     return str(value)
 
 
-def _extract_qwen3(completion: Any) -> Tuple[str, bool, bool]:
+def _extract_qwen3(completion: object) -> tuple[str, bool, bool]:
     text = _to_plain_text(completion)
     start_count = len(_QWEN_THINK_START.findall(text))
     end_count = len(_QWEN_THINK_END.findall(text))
@@ -111,8 +111,8 @@ def _extract_qwen3(completion: Any) -> Tuple[str, bool, bool]:
     return without_thinking, True, False
 
 
-def _collect_channel_payload(entry: Any) -> tuple[str | None, str]:
-    if isinstance(entry, dict):
+def _collect_channel_payload(entry: object) -> tuple[str | None, str]:
+    if isinstance(entry, Mapping):
         channel = entry.get("channel") or entry.get("type") or entry.get("role")
         payload = entry.get("content")
         if payload is None:
@@ -123,9 +123,9 @@ def _collect_channel_payload(entry: Any) -> tuple[str | None, str]:
     return (None, _to_plain_text(entry))
 
 
-def _extract_gpt_oss(completion: Any) -> Tuple[str, bool, bool]:
-    data: Iterable[Any]
-    if isinstance(completion, dict):
+def _extract_gpt_oss(completion: object) -> tuple[str, bool, bool]:
+    data: Iterable[object]
+    if isinstance(completion, Mapping):
         if isinstance(completion.get("output"), list):
             data = completion["output"]
         elif isinstance(completion.get("messages"), list):
@@ -138,9 +138,9 @@ def _extract_gpt_oss(completion: Any) -> Tuple[str, bool, bool]:
         text = _to_plain_text(completion).strip()
         return text, False, False
 
-    final_parts: List[str] = []
-    analysis_parts: List[str] = []
-    fallback_parts: List[str] = []
+    final_parts: list[str] = []
+    analysis_parts: list[str] = []
+    fallback_parts: list[str] = []
     for entry in data:
         channel, payload = _collect_channel_payload(entry)
         if not payload:
@@ -160,8 +160,8 @@ def _extract_gpt_oss(completion: Any) -> Tuple[str, bool, bool]:
     return "\n".join(fallback_parts).strip(), False, False
 
 
-def _extract_glm47(completion: Any) -> Tuple[str, bool, bool]:
-    if isinstance(completion, dict):
+def _extract_glm47(completion: object) -> tuple[str, bool, bool]:
+    if isinstance(completion, Mapping):
         final_text = _to_plain_text(completion.get("content")).strip()
         reasoning_text = _to_plain_text(completion.get("reasoning_content")).strip()
         has_reasoning = bool(reasoning_text)
@@ -173,7 +173,7 @@ def _extract_glm47(completion: Any) -> Tuple[str, bool, bool]:
     return text, False, False
 
 
-def extract_final_answer(completion: Any, profile: str) -> tuple[str, bool, bool]:
+def extract_final_answer(completion: object, profile: str) -> tuple[str, bool, bool]:
     if profile == "qwen3":
         return _extract_qwen3(completion)
     if profile == "gpt_oss":
@@ -185,21 +185,21 @@ def extract_final_answer(completion: Any, profile: str) -> tuple[str, bool, bool
     raise ValueError(f"Unknown reasoning profile: {profile}")
 
 
-def strip_reasoning_for_reward(completion: Any, profile: str) -> str:
+def strip_reasoning_for_reward(completion: object, profile: str) -> str:
     final_text, _has_reasoning, malformed = extract_final_answer(completion, profile)
     if malformed:
         return ""
     return final_text.strip()
 
 
-def apply_malformed_policy(length: int, malformed_policy: str) -> List[int]:
+def apply_malformed_policy(length: int, malformed_policy: str) -> list[int]:
     if malformed_policy != "mask_all":
         raise ValueError(f"Unsupported malformed_policy: {malformed_policy}")
     return [0] * max(0, length)
 
 
-def _token_char_spans(completion_ids: Sequence[int], tokenizer: object) -> List[tuple[int, int]]:
-    spans: List[tuple[int, int]] = []
+def _token_char_spans(completion_ids: Sequence[int], tokenizer: object) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
     previous = ""
     for index in range(len(completion_ids)):
         current = tokenizer.decode(completion_ids[: index + 1], skip_special_tokens=True)
@@ -213,11 +213,11 @@ def _build_mask_from_char_span(
     tokenizer: object,
     start: int,
     end: int,
-) -> List[int]:
+) -> list[int]:
     if not completion_ids:
         return []
     spans = _token_char_spans(completion_ids, tokenizer)
-    mask: List[int] = []
+    mask: list[int] = []
     for token_start, token_end in spans:
         overlaps = token_start < end and token_end > start
         mask.append(1 if overlaps else 0)
@@ -225,12 +225,12 @@ def _build_mask_from_char_span(
 
 
 def build_final_only_mask(
-    completion: Any,
+    completion: object,
     completion_ids: Sequence[int],
     tokenizer: object,
     profile: str,
     malformed_policy: str = "mask_all",
-) -> tuple[List[int], bool, int]:
+) -> tuple[list[int], bool, int]:
     if not completion_ids:
         return [], False, 0
 
@@ -261,7 +261,7 @@ def build_final_only_mask(
     return mask, False, final_len
 
 
-def build_chat_template_kwargs(reasoning_cfg: Any, profile: str) -> Dict[str, Any]:
+def build_chat_template_kwargs(reasoning_cfg: object, profile: str) -> dict[str, object]:
     if not getattr(reasoning_cfg, "enabled", True):
         return {}
     if profile == "qwen3":
@@ -276,7 +276,7 @@ def build_chat_template_kwargs(reasoning_cfg: Any, profile: str) -> Dict[str, An
     return {}
 
 
-def build_generation_kwargs(reasoning_cfg: Any, profile: str) -> Dict[str, Any]:
+def build_generation_kwargs(reasoning_cfg: object, profile: str) -> dict[str, object]:
     if not getattr(reasoning_cfg, "enabled", True):
         return {}
     if profile == "qwen3":

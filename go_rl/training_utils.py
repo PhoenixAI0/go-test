@@ -2,15 +2,27 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, Optional
+from typing import Optional
+
+from .config import VALID_QUANTIZATION_BITS
 
 logger = logging.getLogger(__name__)
 
 
-def quantization_kwargs(bits: int, use_dynamic: bool = False, use_fp8: bool = False) -> Dict[str, object]:
+def quantization_kwargs(
+    bits: int,
+    use_dynamic: bool = False,
+    use_fp8: bool = False,
+) -> dict[str, bool | str]:
     if use_fp8:
         logger.info("Using FP8 quantization (optimal for RTX 40/50, H100, B200)")
         return {"load_in_8bit": True, "bnb_8bit_quant_type": "fp8"}
+
+    if bits not in VALID_QUANTIZATION_BITS:
+        raise ValueError(
+            "quantization_bits must be one of "
+            f"{', '.join(map(str, VALID_QUANTIZATION_BITS))}."
+        )
 
     if use_dynamic and bits == 4:
         logger.info("Using Unsloth Dynamic 4-bit quantization (best accuracy-to-memory)")
@@ -30,13 +42,18 @@ def quantization_kwargs(bits: int, use_dynamic: bool = False, use_fp8: bool = Fa
     if bits in (0, 16, 32):
         logger.info("Using full precision (no quantization)")
         return {}
-    raise ValueError("quantization_bits must be one of 0, 4, 8, 16, or 32.")
 
 
 def default_num_workers() -> int:
     """Compute optimal number of dataloader workers based on CPU count."""
     cpu_count = os.cpu_count() or 1
     return max(1, min(8, cpu_count // 2 or 1))
+
+
+def get_distributed_context() -> tuple[int, int, bool]:
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    return local_rank, world_size, local_rank == 0
 
 
 def configure_torch_for_speed(
@@ -113,7 +130,7 @@ def get_optimal_attention_backend() -> Optional[str]:
         )
         return "flash_attention_2"
 
-    except Exception as exc:
+    except (AttributeError, ImportError, RuntimeError) as exc:
         logger.warning(
             "Failed to detect GPU for attention backend selection: %s", exc
         )

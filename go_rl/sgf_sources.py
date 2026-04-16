@@ -1,15 +1,11 @@
-"""SGF file sources and download utilities.
-
-This module provides functions to download SGF files from various public sources.
-"""
+"""SGF source metadata and validation utilities."""
 
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, List, Optional
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -27,19 +23,19 @@ class SGFSource:
 
 # Public SGF sources
 SOURCES = {
-    "ogs": SGFSource(
-        name="Online-Go.com",
-        description="OGS public games (requires API key)",
-        board_sizes=[9, 13, 19],
-        requires_auth=True,
-        url="https://online-go.com/",
-    ),
     "kgs": SGFSource(
         name="KGS Archives",
-        description="KGS game archives (downloadable via HTTP)",
+        description="KGS archives for manual download",
         board_sizes=[9, 13, 19],
         requires_auth=False,
         url="https://www.gokgs.com/gameArchives.html",
+    ),
+    "ogs": SGFSource(
+        name="Online-Go.com",
+        description="OGS public games (manual export or API key required)",
+        board_sizes=[9, 13, 19],
+        requires_auth=True,
+        url="https://online-go.com/",
     ),
     "waltheri": SGFSource(
         name="Waltheri Pattern Search",
@@ -56,75 +52,6 @@ SOURCES = {
         url="https://gogodonline.co.uk/",
     ),
 }
-
-
-def download_kgs_games(
-    output_dir: Path,
-    board_size: int = 19,
-    max_games: int = 100,
-    year: Optional[int] = None,
-) -> int:
-    """Download games from KGS archives.
-
-    Note: This is a placeholder implementation. KGS archives are organized
-    by year and player, so you would need to:
-    1. Parse the archives index page
-    2. Select specific years/players
-    3. Download individual game files
-
-    Args:
-        output_dir: Directory to save SGF files
-        board_size: Board size to filter (9, 13, or 19)
-        max_games: Maximum number of games to download
-        year: Year to download from (None = most recent)
-
-    Returns:
-        Number of games downloaded
-    """
-    logger.warning(
-        "KGS download not fully implemented. "
-        "KGS archives require manual selection of years/players. "
-        "Visit https://www.gokgs.com/gameArchives.html to browse archives."
-    )
-    return 0
-
-
-def download_ogs_games(
-    output_dir: Path,
-    board_size: int = 19,
-    max_games: int = 100,
-    api_key: Optional[str] = None,
-    min_rank: Optional[str] = None,
-) -> int:
-    """Download games from Online-Go.com.
-
-    Note: This requires an OGS API key. To get one:
-    1. Create an account at https://online-go.com/
-    2. Generate an API key in your settings
-    3. Pass it via --api-key or OGS_API_KEY environment variable
-
-    Args:
-        output_dir: Directory to save SGF files
-        board_size: Board size to filter (9, 13, or 19)
-        max_games: Maximum number of games to download
-        api_key: OGS API key for authentication
-        min_rank: Minimum rank filter (e.g., "5k", "1d")
-
-    Returns:
-        Number of games downloaded
-    """
-    if not api_key:
-        logger.error(
-            "OGS download requires API key. "
-            "Get one from https://online-go.com/ and pass via --api-key"
-        )
-        return 0
-
-    logger.warning(
-        "OGS download not fully implemented. "
-        "You can download your own games manually from https://online-go.com/"
-    )
-    return 0
 
 
 def validate_sgf_file(file_path: Path) -> bool:
@@ -152,7 +79,7 @@ def validate_sgf_file(file_path: Path) -> bool:
 
         return True
 
-    except Exception as e:
+    except (OSError, UnicodeDecodeError) as e:
         logger.debug(f"Error validating {file_path}: {e}")
         return False
 
@@ -179,7 +106,7 @@ def extract_board_size(file_path: Path) -> Optional[int]:
 
         return None
 
-    except Exception as e:
+    except (OSError, UnicodeDecodeError) as e:
         logger.debug(f"Error extracting board size from {file_path}: {e}")
         return None
 

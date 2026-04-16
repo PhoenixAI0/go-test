@@ -6,11 +6,13 @@ import os
 import subprocess
 import threading
 from dataclasses import dataclass
+from collections.abc import Iterable
 from time import sleep
-from typing import Dict, Iterable, List, Optional
+from typing import Optional, cast
 
-from .board import BoardState, coords_to_gtp, gtp_to_coords
+from .board import BoardState, GtpParseError, coords_to_gtp, gtp_to_coords
 from .config import KataGoConfig
+from .shared_types import KataGoResponse
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class KataGoResult:
     winrate: float
-    raw: Dict[str, object]
+    raw: KataGoResponse
     score_lead: Optional[float] = None
     best_move: Optional[str] = None
 
@@ -26,7 +28,7 @@ class KataGoResult:
 @dataclass
 class _PendingRequest:
     event: threading.Event
-    response: Optional[Dict[str, object]] = None
+    response: Optional[KataGoResponse] = None
     error: Optional[BaseException] = None
 
 
@@ -37,7 +39,7 @@ class KataGoAnalysisClient:
         self._write_lock = threading.RLock()
         self._lock = self._write_lock
         self._pending_lock = threading.RLock()
-        self._pending: Dict[int, _PendingRequest] = {}
+        self._pending: dict[int, _PendingRequest] = {}
         self._shutdown_event = threading.Event()
         self._next_id = 1
         self._stderr_thread: Optional[threading.Thread] = None
@@ -144,6 +146,10 @@ class KataGoAnalysisClient:
             except json.JSONDecodeError:
                 logger.warning("Failed to decode KataGo response line: %r", text)
                 continue
+            if not isinstance(response, dict):
+                logger.warning("KataGo response was not a mapping: %r", response)
+                continue
+            response = cast(KataGoResponse, response)
             req_id = response.get("id")
             if not isinstance(req_id, int):
                 logger.warning("KataGo response missing integer id: %r", response)
@@ -178,7 +184,7 @@ class KataGoAnalysisClient:
             self._pending[req_id] = pending
         return pending
 
-    def _write_payload(self, payload: Dict[str, object]) -> None:
+    def _write_payload(self, payload: dict[str, object]) -> None:
         if self._process is None:
             raise RuntimeError("KataGo process not started.")
         if self._process.stdin is None or self._process.stdout is None:
@@ -187,7 +193,7 @@ class KataGoAnalysisClient:
         self._process.stdin.write(json.dumps(payload) + "\n")
         self._process.stdin.flush()
 
-    def _submit_payload(self, payload: Dict[str, object]) -> int:
+    def _submit_payload(self, payload: dict[str, object]) -> int:
         req_id = payload.get("id")
         if not isinstance(req_id, int):
             raise ValueError("KataGo request payload requires an integer id.")
@@ -207,7 +213,7 @@ class KataGoAnalysisClient:
         self,
         req_id: int,
         timeout: Optional[float] = None,
-    ) -> Dict[str, object]:
+    ) -> KataGoResponse:
         with self._pending_lock:
             pending = self._pending.get(req_id)
         if pending is None:
@@ -228,7 +234,7 @@ class KataGoAnalysisClient:
         logger.debug("Received KataGo response id=%s", req_id)
         return pending.response
 
-    def _send(self, payload: Dict[str, object]) -> Dict[str, object]:
+    def _send(self, payload: dict[str, object]) -> KataGoResponse:
         if self._process is None:
             raise RuntimeError("KataGo process not started.")
         if self._process.stdin is None or self._process.stdout is None:
@@ -236,8 +242,8 @@ class KataGoAnalysisClient:
         req_id = self._submit_payload(payload)
         return self._await_raw_result(req_id)
 
-    def _build_payload(self, board: BoardState, req_id: int) -> Dict[str, object]:
-        payload: Dict[str, object] = {
+    def _build_payload(self, board: BoardState, req_id: int) -> dict[str, object]:
+        payload: dict[str, object] = {
             "id": req_id,
             "boardXSize": board.size,
             "boardYSize": board.size,
@@ -288,7 +294,7 @@ class KataGoAnalysisClient:
         req_id = self.submit_position(board)
         return self.await_result(req_id)
 
-    def analyze_positions(self, boards: Iterable[BoardState]) -> List[KataGoResult]:
+    def analyze_positions(self, boards: Iterable[BoardState]) -> list[KataGoResult]:
         board_list = list(boards)
         if not board_list:
             return []
@@ -300,8 +306,8 @@ class KataGoAnalysisClient:
         board: BoardState,
         moves: Iterable[str],
         player: Optional[str] = None,
-    ) -> Dict[str, float]:
-        results: Dict[str, float] = {}
+    ) -> dict[str, float]:
+        results: dict[str, float] = {}
         move_player = player.strip().upper() if player else board.next_player()
         move_list = list(moves)
         logger.debug(
@@ -309,7 +315,7 @@ class KataGoAnalysisClient:
             len(move_list),
             move_player,
         )
-        candidate_boards: List[BoardState] = []
+        candidate_boards: list[BoardState] = []
         for move in move_list:
             candidate = board.clone()
             candidate.apply_move(move_player, move)
@@ -335,28 +341,28 @@ class KataGoAnalysisClient:
             return "PASS"
         try:
             coords = gtp_to_coords(best_move, board.size)
-        except Exception:
+        except GtpParseError:
             return "PASS"
         if not analysis_board.is_strict_legal(move_player, coords):
             return "PASS"
         return best_move
 
 
-def _extract_winrate(result: Dict[str, object]) -> float:
+def _extract_winrate(result: KataGoResponse) -> float:
     root_info = result.get("rootInfo")
     if isinstance(root_info, dict) and "winrate" in root_info:
         return float(root_info["winrate"])
     raise KeyError("KataGo response missing rootInfo.winrate")
 
 
-def _extract_score_lead(result: Dict[str, object]) -> Optional[float]:
+def _extract_score_lead(result: KataGoResponse) -> Optional[float]:
     root_info = result.get("rootInfo")
     if isinstance(root_info, dict) and "scoreLead" in root_info:
         return float(root_info["scoreLead"])
     return None
 
 
-def _extract_best_move(result: Dict[str, object]) -> Optional[str]:
+def _extract_best_move(result: KataGoResponse) -> Optional[str]:
     move_infos = result.get("moveInfos")
     if not isinstance(move_infos, list) or not move_infos:
         return None

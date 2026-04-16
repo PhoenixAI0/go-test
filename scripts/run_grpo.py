@@ -5,10 +5,19 @@ import logging
 import os
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Protocol
+from typing import Callable, Optional
 
 from go_rl.board import BoardState, gtp_to_coords
-from go_rl.config import KataGoConfig, ReasoningConfig, RewardConfig, RolloutConfig, TrainingConfig
+from go_rl.config import (
+    KataGoConfig,
+    ReasoningConfig,
+    RewardConfig,
+    RolloutConfig,
+    TrainingConfig,
+    load_yaml_mapping,
+    resolve_config_base_dir,
+    run_name_for_config,
+)
 from go_rl.katago import KataGoResult
 from go_rl.katago_pool import build_katago_service
 from go_rl.logging_utils import setup_logging
@@ -17,86 +26,48 @@ from go_rl.reasoning import detect_reasoning_profile, strip_reasoning_for_reward
 from go_rl.rewards import evaluate_move, is_legal_coords
 from go_rl.rollout import normalize_move
 from go_rl.run_logging import write_run_log
+from go_rl.shared_types import BoardKey, KataGoService, board_key
 from go_rl.training_utils import (
     configure_torch_for_speed,
     default_num_workers,
+    get_distributed_context,
     get_optimal_attention_backend,
     quantization_kwargs,
 )
 from go_rl.wandb_utils import (
     configure_wandb,
     finish_wandb,
+    log_prefixed_history,
     log_system_metrics,
-    log_training_metrics,
 )
 from venv_utils import ensure_virtualenv
 
 logger = logging.getLogger(__name__)
 
-
-class _KataGoService(Protocol):
-    def start(self) -> None: ...
-    def close(self) -> None: ...
-    def analyze_position(self, board: BoardState) -> KataGoResult: ...
-    def analyze_positions(self, boards: Iterable[BoardState]) -> List[KataGoResult]: ...
-
-
-def board_key(
-    board: BoardState,
-) -> tuple[int, str, tuple[tuple[int, ...], ...]]:
-    return (
-        board.size,
-        board.next_player(),
-        tuple(tuple(row) for row in board.current_board()),
-    )
-
-
 def _analyze_unique_positions(
-    katago: _KataGoService,
-    boards_by_key: Dict[object, BoardState],
-) -> Dict[object, KataGoResult]:
+    katago: KataGoService,
+    boards_by_key: dict[BoardKey, BoardState],
+) -> dict[BoardKey, KataGoResult]:
     if not boards_by_key:
         return {}
     keys = list(boards_by_key.keys())
     boards = [boards_by_key[key] for key in keys]
-    try:
-        analyses = katago.analyze_positions(boards)
-        if len(analyses) != len(keys):
-            raise RuntimeError(
-                f"KataGo returned {len(analyses)} results for {len(keys)} requests."
-            )
-        return {key: analysis for key, analysis in zip(keys, analyses)}
-    except Exception:
-        logger.debug(
-            "Batched KataGo analyze_positions failed; falling back to per-position calls.",
-            exc_info=True,
+    analyses = katago.analyze_positions(boards)
+    if len(analyses) != len(keys):
+        raise RuntimeError(
+            f"KataGo returned {len(analyses)} results for {len(keys)} requests."
         )
-        fallback: Dict[object, KataGoResult] = {}
-        for key, board in boards_by_key.items():
-            fallback[key] = katago.analyze_position(board)
-        return fallback
-
-
-def load_yaml(path: str) -> Dict[str, object]:
-    try:
-        import yaml
-    except ImportError as exc:
-        raise RuntimeError("PyYAML is required for GRPO config loading.") from exc
-    with open(path, "r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
-    if not isinstance(data, dict):
-        raise ValueError("Config must be a mapping")
-    return data
+    return {key: analysis for key, analysis in zip(keys, analyses)}
 
 
 def build_reward_fn(
-    katago: _KataGoService,
+    katago: KataGoService,
     reward_cfg: RewardConfig,
     rollout_cfg: RolloutConfig,
     reasoning_cfg: Optional[ReasoningConfig] = None,
     model_name: str = "",
     tokenizer: object | None = None,
-) -> callable:
+) -> Callable[..., list[float]]:
     effective_reasoning = reasoning_cfg or ReasoningConfig(enabled=False)
     profile = detect_reasoning_profile(
         model_name=model_name,
@@ -110,11 +81,9 @@ def build_reward_fn(
         return 1.0 - winrate
 
     def reward_fn(
-        prompts: List[str], completions: List[str], **_: object
-    ) -> List[float]:
-        # CRITICAL: In multi-GPU training, reward computation MUST only run on rank 0
-        # TRL's GRPOTrainer handles reward computation on rank 0 and broadcasts to workers
-        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+        prompts: list[str], completions: list[str], **_: object
+    ) -> list[float]:
+        local_rank, _, _ = get_distributed_context()
         if local_rank != 0:
             raise RuntimeError(
                 f"Reward function called on non-main process (rank {local_rank}). "
@@ -126,15 +95,15 @@ def build_reward_fn(
                 "KataGo not initialized on rank 0. This is a configuration error. "
                 "Ensure KataGo client is started before creating the reward function."
             )
-        rewards: List[float] = []
-        base_requests: Dict[object, BoardState] = {}
-        candidate_requests: Dict[object, BoardState] = {}
-        entries: List[Dict[str, object]] = []
+        rewards: list[float] = []
+        base_requests: dict[BoardKey, BoardState] = {}
+        candidate_requests: dict[BoardKey, BoardState] = {}
+        entries: list[dict[str, object]] = []
 
         for prompt, completion in zip(prompts, completions):
             try:
                 board = parse_prompt(prompt)
-            except Exception:
+            except ValueError:
                 logger.debug("Failed to parse prompt for reward scoring", exc_info=True)
                 entries.append({"prompt_error": True})
                 continue
@@ -142,7 +111,7 @@ def build_reward_fn(
             player = board.next_player()
             key = board_key(board)
             base_requests.setdefault(key, board)
-            entry: Dict[str, object] = {
+            entry: dict[str, object] = {
                 "prompt_error": False,
                 "board": board,
                 "player": player,
@@ -155,7 +124,7 @@ def build_reward_fn(
             try:
                 move = normalize_move(reward_text, stop_at_pass=rollout_cfg.stop_at_pass)
                 entry["reward_move"] = move
-            except Exception:
+            except ValueError:
                 logger.debug(
                     "Failed to normalize completion after reasoning strip: %r",
                     completion,
@@ -167,7 +136,7 @@ def build_reward_fn(
             try:
                 coords = gtp_to_coords(move, board.size)
                 valid_coords = True
-            except Exception:
+            except ValueError:
                 logger.debug("Invalid move coords: %r", move, exc_info=True)
                 coords = None
                 valid_coords = False
@@ -181,12 +150,7 @@ def build_reward_fn(
                 continue
 
             candidate = board.clone()
-            try:
-                candidate.apply_move(player, move)
-            except Exception:
-                logger.debug("Candidate analysis failed", exc_info=True)
-                entries.append(entry)
-                continue
+            candidate.apply_move(player, move)
             cand_key = (key, move)
             candidate_requests.setdefault(cand_key, candidate)
             entry["candidate_key"] = cand_key
@@ -231,25 +195,6 @@ def build_reward_fn(
         return rewards
 
     return reward_fn
-
-
-def _log_grpo_reward_history(log_history: list[dict], wandb_enabled: bool) -> None:
-    if not wandb_enabled:
-        return
-    for entry in log_history:
-        step = entry.get("step")
-        if step is None:
-            continue
-        metrics: Dict[str, float] = {}
-        for key, value in entry.items():
-            if key == "step":
-                continue
-            if "reward" in key.lower():
-                metrics[f"grpo/{key}"] = float(value)
-        if "loss" in entry:
-            metrics["grpo/loss"] = float(entry["loss"])
-        if metrics:
-            log_training_metrics(step=int(step), metrics=metrics, commit=False)
 
 
 def main() -> None:
@@ -304,8 +249,11 @@ def main() -> None:
 
     setup_logging(args.log_level)
     logger.info("Loading GRPO config from %s", args.config)
-    cfg = load_yaml(args.config)
-    config_base_dir = str(Path(os.path.expandvars(os.path.expanduser(args.config))).resolve().parent)
+    cfg = load_yaml_mapping(
+        args.config,
+        "PyYAML is required for GRPO config loading.",
+    )
+    config_base_dir = resolve_config_base_dir(args.config)
     train_cfg = TrainingConfig(**cfg["training"])
     katago_cfg = KataGoConfig(config_base_dir=config_base_dir, **cfg["katago"])
     reward_cfg = RewardConfig(**cfg["reward"])
@@ -324,15 +272,17 @@ def main() -> None:
     except ImportError as exc:
         raise RuntimeError("Missing dependencies for GRPO training.") from exc
 
-    # Configure PyTorch for optimal performance (RL-specific optimizations)
-    attention_backend = args.attention_backend if args.attention_backend != "auto" else get_optimal_attention_backend()
+    attention_backend = (
+        args.attention_backend
+        if args.attention_backend != "auto"
+        else get_optimal_attention_backend()
+    )
     configure_torch_for_speed(
         enable_compile=args.enable_compile,
         attention_backend=attention_backend,
     )
 
-    # Prepare wandb configuration with hyperparameters
-    run_name = f"grpo_{Path(args.config).stem}"
+    run_name = run_name_for_config("grpo", args.config)
     quant_type = "fp8" if args.use_fp8 else "dynamic-4bit" if args.use_dynamic_4bit else f"{train_cfg.quantization_bits}bit"
     wandb_config = {
         "model_name": train_cfg.model_name,
@@ -378,16 +328,15 @@ def main() -> None:
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=train_cfg.model_name,
         max_seq_length=train_cfg.max_seq_length,
-        dtype=None,  # Auto-select optimal dtype
+        dtype=None,
         **quantization_kwargs(
             train_cfg.quantization_bits,
             use_dynamic=args.use_dynamic_4bit,
             use_fp8=args.use_fp8,
         ),
-        fast_inference=True,  # Enable fast inference for RL rollouts
+        fast_inference=True,
     )
 
-    # Apply LoRA with optimized parameters (only if use_lora=True)
     if train_cfg.use_lora:
         model = FastLanguageModel.get_peft_model(
             model,
@@ -420,21 +369,14 @@ def main() -> None:
         dataset = dataset.select(range(smoke_count))
     logger.info("Dataset rows: %d", len(dataset))
 
-    # Check if we're in distributed training (multi-GPU)
-    # CRITICAL: Only start KataGo on the main process (rank 0) to avoid:
-    # - Resource contention (multiple KataGo instances competing)
-    # - File system conflicts (simultaneous writes)
-    # - Redundant computation (same analysis on multiple ranks)
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    world_size = int(os.environ.get("WORLD_SIZE", "1"))
-    is_main_process = local_rank == 0
+    local_rank, world_size, is_main_process = get_distributed_context()
 
     if world_size > 1:
         logger.info(
             "Multi-GPU training detected: rank %d of %d", local_rank, world_size
         )
 
-    katago: Optional[_KataGoService] = None
+    katago: Optional[KataGoService] = None
     try:
         if is_main_process:
             katago = build_katago_service(katago_cfg)
@@ -452,8 +394,6 @@ def main() -> None:
             logger.info(
                 "Reward computation will be handled by rank 0 and broadcasted"
             )
-            # Note: In multi-GPU training, reward computation happens on main process
-            # and rewards are broadcasted to other processes by the trainer
 
         Path(train_cfg.output_dir).mkdir(parents=True, exist_ok=True)
         log_path = write_run_log(
@@ -499,17 +439,14 @@ def main() -> None:
         }
         max_steps = 1 if args.smoke else train_cfg.num_steps
         trainer_args["max_steps"] = max_steps if max_steps > 0 else -1
-        # GRPO-specific Unsloth optimizations (saves ~5GB VRAM)
         if train_cfg.grpo_mini_batch is not None:
             trainer_args["unsloth_grpo_mini_batch"] = train_cfg.grpo_mini_batch
         if train_cfg.grpo_logit_chunk_multiplier is not None:
             trainer_args["unsloth_logit_chunk_multiplier"] = (
                 train_cfg.grpo_logit_chunk_multiplier
             )
-        # 8-bit optimizer for memory efficiency
         if train_cfg.use_8bit_optimizer:
             trainer_args["optim"] = "adamw_8bit"
-        # Use Unsloth's optimized gradient checkpointing
         if args.gradient_checkpointing:
             trainer_args["gradient_checkpointing"] = "unsloth"
             trainer_args["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
@@ -535,24 +472,23 @@ def main() -> None:
             reasoning_model_name=train_cfg.model_name,
         )
 
-        # Train with periodic GPU metrics logging
         logger.info("Starting GRPO training...")
         try:
             trainer.train()
             logger.info("GRPO training completed successfully")
             if is_main_process:
-                _log_grpo_reward_history(
-                    trainer.state.log_history, wandb_enabled=wandb_enabled
+                log_prefixed_history(
+                    trainer.state.log_history,
+                    wandb_enabled,
+                    "grpo/",
                 )
         finally:
-            # Log final GPU metrics
             if wandb_enabled and is_main_process:
                 log_system_metrics()
 
         logger.info("Saving model to %s", train_cfg.output_dir)
         trainer.save_model(train_cfg.output_dir)
 
-        # Finish wandb run on main process
         if wandb_enabled and is_main_process:
             finish_wandb()
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .board import gtp_to_coords, BoardState, _apply_strict_move, _copy_board, _EMPTY, _STONE
+from .board import BoardState, gtp_to_coords
 from .config import RewardConfig
 from .rules import BoardHistory, LegalityLevel, validate_legality
 
@@ -55,6 +55,9 @@ def resolve_legality_level(config: RewardConfig) -> LegalityLevel:
 def _strict_state_with_history(
     board: BoardState,
 ) -> tuple[list[list[int]], Optional[list[list[int]]], BoardHistory]:
+    # Import board internals locally so reward scoring only depends on them when needed.
+    from .board import _EMPTY, _STONE, _apply_strict_move, _copy_board
+
     if board.has_snapshot():
         current = board.current_board()
         history = BoardHistory()
@@ -99,7 +102,7 @@ def is_legal_coords(
             next_board, previous, history, LegalityLevel.SUPERKO
         )
         return is_legal
-    except Exception:
+    except ValueError:
         return False
 
 
@@ -111,7 +114,7 @@ def is_legal_move(
 ) -> bool:
     try:
         coords = gtp_to_coords(move, board.size)
-    except Exception:
+    except ValueError:
         return False
     return is_legal_coords(board, player, coords, config)
 
@@ -127,7 +130,7 @@ def evaluate_move(
     try:
         coords = gtp_to_coords(move, board.size)
         is_legal = is_legal_coords(board, player, coords, config)
-    except Exception:
+    except ValueError:
         is_legal = False
     return RewardBreakdown(
         winrate=winrate_reward(winrate_delta, config),

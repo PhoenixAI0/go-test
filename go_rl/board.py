@@ -172,7 +172,7 @@ class BoardState:
                 raise ValueError(f"Unknown player at move {index}: {player}")
             try:
                 board = _apply_strict_move(board, color, coords)
-            except Exception as exc:
+            except ValueError as exc:
                 raise ValueError(f"Illegal move at {index}: {player} {coords}") from exc
         return board
 
@@ -258,7 +258,7 @@ class BoardState:
             return False
         try:
             board, previous = self._strict_board_state()
-        except Exception:
+        except ValueError:
             return False
         row, col = coords
         if row < 0 or row >= self.size or col < 0 or col >= self.size:
@@ -267,7 +267,7 @@ class BoardState:
             return False
         try:
             next_board = _apply_strict_move(board, color, coords)
-        except Exception:
+        except ValueError:
             return False
         if previous is not None and next_board == previous:
             return False

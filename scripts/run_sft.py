@@ -5,9 +5,9 @@ import logging
 import math
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict
+from typing import TypedDict
 
-from go_rl.config import SftConfig, load_config
+from go_rl.config import SftConfig, load_config, run_name_for_config
 from go_rl.reasoning import (
     build_chat_template_kwargs,
     build_final_only_mask,
@@ -32,7 +32,28 @@ from venv_utils import ensure_virtualenv
 logger = logging.getLogger(__name__)
 
 
-def _convert_to_messages(example: Dict[str, str], eos_token: str) -> Dict[str, Any]:
+class _ChatMessage(TypedDict):
+    role: str
+    content: str
+
+
+class _SftExample(TypedDict):
+    prompt: str
+    response: str
+
+
+class _ReasoningSample(TypedDict):
+    prompt: list[_ChatMessage]
+    completion: list[_ChatMessage]
+    raw_completion: str
+
+
+class _MaskedSample(TypedDict):
+    input_ids: list[int]
+    completion_mask: list[int]
+
+
+def _convert_to_messages(example: _SftExample, eos_token: str) -> _ReasoningSample:
     prompt = example["prompt"]
     response = example["response"]
     completion = f"{response}{eos_token}"
@@ -44,14 +65,14 @@ def _convert_to_messages(example: Dict[str, str], eos_token: str) -> Dict[str, A
 
 
 def _add_reasoning_completion_mask(
-    example: Dict[str, Any],
-    tokenizer: Any,
+    example: _ReasoningSample,
+    tokenizer: object,
     profile: str,
     malformed_policy: str,
     reasoning_enabled: bool,
     optimize_final_only: bool,
-    chat_template_kwargs: Dict[str, Any],
-) -> Dict[str, Any]:
+    chat_template_kwargs: dict[str, object],
+) -> _MaskedSample:
     prompt_messages = example["prompt"]
     completion_messages = example["completion"]
     prompt_ids = tokenizer.apply_chat_template(
@@ -102,7 +123,7 @@ def _log_perplexity_history(log_history: list[dict], wandb_enabled: bool) -> Non
         step = entry.get("step")
         if step is None:
             continue
-        metrics: Dict[str, float] = {}
+        metrics: dict[str, float] = {}
         if "loss" in entry:
             train_loss = float(entry["loss"])
             metrics["train/loss"] = train_loss
@@ -184,7 +205,7 @@ def main() -> None:
     )
 
     # Prepare wandb configuration with hyperparameters
-    run_name = f"sft_{Path(args.config).stem}"
+    run_name = run_name_for_config("sft", args.config)
     quant_type = "fp8" if args.use_fp8 else "dynamic-4bit" if args.use_dynamic_4bit else f"{cfg.quantization_bits}bit"
     wandb_config = {
         "model_name": cfg.model_name,

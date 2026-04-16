@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from typing import Dict
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -15,7 +15,7 @@ from go_rl.katago import KataGoAnalysisClient, KataGoResult
 
 @pytest.fixture
 def mock_katago_config() -> KataGoConfig:
-    """Create a mock KataGo config for testing."""
+    """Mock KataGo config."""
     return KataGoConfig(
         binary_path="/mock/katago",
         model_path="/mock/model.bin.gz",
@@ -28,7 +28,7 @@ def mock_katago_config() -> KataGoConfig:
 
 @pytest.fixture
 def mock_katago_response() -> Dict[str, object]:
-    """Create a mock KataGo analysis response."""
+    """Mock KataGo response."""
     return {
         "id": 1,
         "turnNumber": 0,
@@ -51,17 +51,11 @@ def mock_katago_response() -> Dict[str, object]:
 
 @pytest.fixture
 def mock_katago_client(mock_katago_config, mock_katago_response):
-    """Create a mock KataGo client that returns deterministic results.
-
-    This fixture mocks the KataGoAnalysisClient to return fixed winrates
-    without requiring a real KataGo binary.
-    """
+    """Mock KataGo client with deterministic results."""
     client = Mock(spec=KataGoAnalysisClient)
     client.config = mock_katago_config
 
-    # Mock analyze_position to return deterministic results
     def mock_analyze(board: BoardState) -> KataGoResult:
-        # Return different winrates based on move count for variety
         base_winrate = 0.5
         move_bonus = len(board.stones()) * 0.01
         winrate = min(0.95, base_winrate + move_bonus)
@@ -73,17 +67,14 @@ def mock_katago_client(mock_katago_config, mock_katago_response):
 
     client.analyze_position = Mock(side_effect=mock_analyze)
 
-    # Mock evaluate_moves
     def mock_evaluate(board: BoardState, moves, player=None):
         results = {}
         for i, move in enumerate(moves):
-            # Give different winrates to different moves
             results[move] = 0.5 + (i * 0.05)
         return results
 
     client.evaluate_moves = Mock(side_effect=mock_evaluate)
 
-    # Mock start/close
     client.start = Mock()
     client.close = Mock()
 
@@ -92,10 +83,7 @@ def mock_katago_client(mock_katago_config, mock_katago_response):
 
 @pytest.fixture
 def real_katago_config() -> KataGoConfig | None:
-    """Create a real KataGo config from environment variables.
-
-    Returns None if KataGo is not configured (allows skipping tests).
-    """
+    """Real KataGo config from environment, or `None`."""
     binary_path = os.environ.get("KATAGO_BIN")
     model_path = os.environ.get("KATAGO_MODEL")
     config_path = os.environ.get("KATAGO_CONFIG")
@@ -103,7 +91,6 @@ def real_katago_config() -> KataGoConfig | None:
     if not all([binary_path, model_path, config_path]):
         return None
 
-    # Check if paths actually exist
     if not os.path.exists(binary_path):
         return None
 
@@ -122,22 +109,15 @@ def real_katago_config() -> KataGoConfig | None:
 
 @pytest.fixture
 def skip_if_no_katago(real_katago_config):
-    """Skip test if KataGo is not available.
-
-    Usage:
-        def test_something(skip_if_no_katago):
-            # Test code that requires KataGo
-            pass
-    """
+    """Skip when KataGo is unavailable."""
     if real_katago_config is None:
         pytest.skip("KataGo not available (set KATAGO_BIN, KATAGO_MODEL, KATAGO_CONFIG)")
 
 
 @pytest.fixture
 def sample_board_9x9() -> BoardState:
-    """Create a sample 9x9 board with some moves."""
+    """Sample 9x9 board."""
     board = BoardState(size=9)
-    # Play a few opening moves
     board.apply_move("B", "D4")
     board.apply_move("W", "F6")
     board.apply_move("B", "C7")
@@ -146,9 +126,8 @@ def sample_board_9x9() -> BoardState:
 
 @pytest.fixture
 def sample_board_19x19() -> BoardState:
-    """Create a sample 19x19 board with some moves."""
+    """Sample 19x19 board."""
     board = BoardState(size=19)
-    # Play a few opening moves
     board.apply_move("B", "Q16")
     board.apply_move("W", "D4")
     board.apply_move("B", "Q4")

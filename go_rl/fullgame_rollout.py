@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from dataclasses import dataclass
-from typing import MutableMapping, Optional, Protocol
+from typing import Optional
 
 from .board import BoardState
-from .config import FullGameConfig, RewardConfig, RolloutConfig
+from .config import FullGameConfig, ReasoningConfig, RewardConfig, RolloutConfig
 from .katago import KataGoResult
 from .prompting import build_generation_inputs, build_prompt, parse_move
 from .reasoning import (
@@ -21,15 +22,10 @@ from .rewards import (
     resolve_legality_level,
 )
 from .rollout import normalize_move
+from .shared_types import BoardKey, KataGoService, board_key
 from .rules import LegalityLevel
 
 logger = logging.getLogger(__name__)
-
-
-class _KataGoService(Protocol):
-    def analyze_position(self, board: BoardState) -> KataGoResult: ...
-    def choose_move(self, board: BoardState, player: str | None = None) -> str: ...
-
 
 @dataclass
 class FullGameEpisodeResult:
@@ -82,27 +78,16 @@ def align_board_to_player_turn(board: BoardState, player: str) -> BoardState:
     aligned.apply_move(to_move, "PASS", strict=True)
     return aligned
 
-
-def board_key(
-    board: BoardState,
-) -> tuple[int, str, tuple[tuple[int, ...], ...]]:
-    return (
-        board.size,
-        board.next_player(),
-        tuple(tuple(row) for row in board.current_board()),
-    )
-
-
 def _parse_completion_to_move(completion: str, stop_at_pass: bool) -> str:
     stripped = completion.strip()
     if not stripped:
         return "PASS"
     try:
         return parse_move(stripped)
-    except Exception:
+    except ValueError:
         try:
             return normalize_move(stripped, stop_at_pass=stop_at_pass)
-        except Exception:
+        except ValueError:
             return "PASS"
 
 
@@ -121,8 +106,8 @@ def generate_model_move(
     board: BoardState,
     rollout_cfg: RolloutConfig,
     reasoning_profile: str,
-    chat_template_kwargs: Optional[dict[str, object]] = None,
-    generation_kwargs: Optional[dict[str, object]] = None,
+    chat_template_kwargs: dict[str, object] | None = None,
+    generation_kwargs: dict[str, object] | None = None,
 ) -> str:
     """Generate one model move from the current board prompt."""
     try:
@@ -185,14 +170,14 @@ def simulate_full_game(
     initial_completion: str,
     model: object,
     tokenizer: object,
-    katago: _KataGoService,
+    katago: KataGoService,
     reward_cfg: RewardConfig,
     rollout_cfg: RolloutConfig,
     fullgame_cfg: FullGameConfig,
     model_color: str,
-    reasoning_cfg: Optional[object] = None,
+    reasoning_cfg: ReasoningConfig | None = None,
     reasoning_model_name: str = "",
-    analysis_cache: Optional[MutableMapping[tuple, KataGoResult]] = None,
+    analysis_cache: Optional[OrderedDict[BoardKey, KataGoResult]] = None,
     max_cache_size: Optional[int] = None,
 ) -> FullGameEpisodeResult:
     """Run one interactive game continuation and return a scalar reward breakdown."""
@@ -231,24 +216,13 @@ def simulate_full_game(
         key = board_key(current_board)
         cached = analysis_cache.get(key)
         if cached is not None:
-            mover = getattr(analysis_cache, "move_to_end", None)
-            if callable(mover):
-                mover(key)
+            analysis_cache.move_to_end(key)
             return cached
         result = katago.analyze_position(current_board)
         analysis_cache[key] = result
         if max_cache_size is not None and max_cache_size > 0:
             while len(analysis_cache) > max_cache_size:
-                popitem = getattr(analysis_cache, "popitem", None)
-                if callable(popitem):
-                    try:
-                        popitem(last=False)  # OrderedDict API (FIFO eviction)
-                        continue
-                    except TypeError:
-                        pass
-                # Generic MutableMapping fallback.
-                first_key = next(iter(analysis_cache))
-                del analysis_cache[first_key]
+                analysis_cache.popitem(last=False)
         return result
 
     def _record_pass(move_text: str) -> None:

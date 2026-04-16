@@ -139,7 +139,7 @@ fi
 
 # Build command
 if [ -z "$MULTI_GPU" ]; then
-    # Single GPU mode (backward compatible)
+    # Single GPU mode
     CMD="uv run python scripts/run_grpo.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
 else
     if [ "$MULTI_GPU" = "auto" ]; then

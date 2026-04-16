@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
+from typing import Protocol, Sequence
 
-from typing import Any, Dict, List, Optional
+from .board import BoardState
 
-from .board import BoardState, _EMPTY, _STONE
+
+class _TensorLike(Protocol):
+    def to(self, *args: object, **kwargs: object) -> "_TensorLike": ...
+
+    @property
+    def shape(self) -> Sequence[int]: ...
 
 
 def parse_prompt(prompt: str) -> BoardState:
@@ -17,7 +24,7 @@ def parse_prompt(prompt: str) -> BoardState:
     return _parse_move_history_prompt(lines, size)
 
 
-def _parse_move_history_prompt(lines: List[str], size: int) -> BoardState:
+def _parse_move_history_prompt(lines: list[str], size: int) -> BoardState:
     board = BoardState.empty(size)
     for line in lines[1:]:
         if line == "move:":
@@ -27,9 +34,11 @@ def _parse_move_history_prompt(lines: List[str], size: int) -> BoardState:
     return board
 
 
-def _parse_matrix_prompt(lines: List[str], size: int) -> BoardState:
-    to_play: Optional[str] = None
-    board_start: Optional[int] = None
+def _parse_matrix_prompt(lines: list[str], size: int) -> BoardState:
+    from .board import _EMPTY, _STONE
+
+    to_play: str | None = None
+    board_start: int | None = None
     for index, line in enumerate(lines[1:], start=1):
         if line.startswith("to_play:"):
             to_play = line.split(":", 1)[1].strip().upper()
@@ -41,7 +50,7 @@ def _parse_matrix_prompt(lines: List[str], size: int) -> BoardState:
     if board_start is None:
         raise ValueError("Prompt missing board block")
 
-    matrix_rows: List[List[int]] = []
+    matrix_rows: list[list[int]] = []
     for line in lines[board_start:]:
         if line == "move:":
             break
@@ -60,7 +69,7 @@ def _parse_matrix_prompt(lines: List[str], size: int) -> BoardState:
                 continue
         if len(row_text) != size:
             raise ValueError("Prompt row width does not match board size")
-        row: List[int] = []
+        row: list[int] = []
         for char in row_text:
             if char == ".":
                 row.append(_EMPTY)
@@ -80,7 +89,7 @@ _MOVE_PATTERN = re.compile(r"\b([A-HJ-T])\s*([1-9]|1[0-9])\b", re.IGNORECASE)
 _PASS_PATTERN = re.compile(r"\bPASS\b", re.IGNORECASE)
 
 
-def build_prompt(board: BoardState, player: Optional[str] = None) -> str:
+def build_prompt(board: BoardState, player: str | None = None) -> str:
     if player is not None:
         normalized = player.strip().upper()
         if normalized not in {"B", "W"}:
@@ -91,8 +100,8 @@ def build_prompt(board: BoardState, player: Optional[str] = None) -> str:
 def build_generation_inputs(
     tokenizer: object,
     prompt: str,
-    chat_template_kwargs: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    chat_template_kwargs: Mapping[str, object] | None = None,
+) -> Mapping[str, _TensorLike]:
     chat_kwargs = chat_template_kwargs or {}
     if hasattr(tokenizer, "apply_chat_template"):
         messages = [{"role": "user", "content": prompt}]

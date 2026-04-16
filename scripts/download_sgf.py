@@ -1,29 +1,17 @@
 #!/usr/bin/env python3
-"""Download SGF files from public sources.
-
-This script provides automated and semi-automated ways to download SGF files
-for training Go models.
-"""
+"""Inspect and validate SGF files for training Go models."""
 
 from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from pathlib import Path
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from go_rl.sgf_sources import (
-    SOURCES,
-    download_kgs_games,
-    download_ogs_games,
-    list_sources,
-    print_manual_instructions,
-    validate_sgf_directory,
-)
+from go_rl.sgf_sources import list_sources, print_manual_instructions, validate_sgf_directory
 from venv_utils import ensure_virtualenv
 
 
@@ -38,7 +26,7 @@ def setup_logging(level: str = "INFO") -> None:
 def main() -> int:
     ensure_virtualenv()
     parser = argparse.ArgumentParser(
-        description="Download SGF files for Go RL training",
+        description="Inspect and validate SGF files for Go RL training",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -48,17 +36,11 @@ Examples:
   # List available sources
   uv run python scripts/download_sgf.py --list-sources
 
-  # Download from KGS (placeholder)
-  uv run python scripts/download_sgf.py --source kgs --board-size 19 --count 100
-
-  # Download from OGS (requires API key)
-  uv run python scripts/download_sgf.py --source ogs --api-key YOUR_KEY --count 100
-
   # Show manual download instructions
   uv run python scripts/download_sgf.py --manual-instructions --board-size 9
 
-Note: Most sources require manual download or API keys. This script provides
-      validation and guidance for obtaining SGF files.
+Note: SGF sources are listed for manual download or export. This script
+      validates local files and points you to the available sources.
         """,
     )
 
@@ -76,24 +58,9 @@ Note: Most sources require manual download or API keys. This script provides
         help="Output directory (default: data/sgf_<board_size>)",
     )
     parser.add_argument(
-        "--count",
-        type=int,
-        default=100,
-        help="Number of games to download (default: 100)",
-    )
-    parser.add_argument(
-        "--source",
-        choices=list(SOURCES.keys()),
-        help="Source to download from (kgs, ogs, waltheri)",
-    )
-    parser.add_argument(
-        "--api-key",
-        help="API key for authenticated sources (OGS)",
-    )
-    parser.add_argument(
         "--validate-only",
         action="store_true",
-        help="Only validate existing SGF files, don't download",
+        help="Only validate existing SGF files",
     )
     parser.add_argument(
         "--list-sources",
@@ -175,63 +142,6 @@ Note: Most sources require manual download or API keys. This script provides
         print(f"\n✓ Found {valid} valid SGF files")
         print("\nNext step: Run ./scripts/prepare_data.sh to create training data")
         return 0
-
-    # Handle download
-    if args.source:
-        logger.info(
-            f"Downloading {args.count} games from {args.source} "
-            f"(board size: {args.board_size})"
-        )
-
-        downloaded = 0
-        if args.source == "kgs":
-            downloaded = download_kgs_games(
-                output_dir=output_dir,
-                board_size=args.board_size,
-                max_games=args.count,
-            )
-        elif args.source == "ogs":
-            api_key = args.api_key or os.environ.get("OGS_API_KEY")
-            if not api_key:
-                logger.error(
-                    "OGS requires API key. Pass via --api-key or OGS_API_KEY env var"
-                )
-                return 1
-            downloaded = download_ogs_games(
-                output_dir=output_dir,
-                board_size=args.board_size,
-                max_games=args.count,
-                api_key=api_key,
-            )
-        elif args.source == "waltheri":
-            logger.warning(
-                "Waltheri download not implemented. "
-                "Visit https://ps.waltheri.net/ to download games manually."
-            )
-            downloaded = 0
-
-        if downloaded > 0:
-            logger.info(f"Successfully downloaded {downloaded} games")
-
-            # Validate downloaded files
-            logger.info("Validating downloaded files...")
-            valid, invalid = validate_sgf_directory(
-                output_dir,
-                expected_board_size=args.board_size,
-                verbose=args.verbose,
-            )
-
-            if valid > 0:
-                print(f"\n✓ Downloaded and validated {valid} SGF files")
-                print("\nNext step: Run ./scripts/prepare_data.sh to create training data")
-                return 0
-            else:
-                logger.error("No valid SGF files after download")
-                return 1
-        else:
-            logger.warning("No games downloaded (source may require manual download)")
-            print_manual_instructions(args.board_size, output_dir)
-            return 1
 
     # Default: show help and manual instructions
     print("\nNo action specified. Use --help for usage information.\n")

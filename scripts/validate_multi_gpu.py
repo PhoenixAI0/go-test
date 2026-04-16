@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
-from pathlib import Path
 from typing import List, Tuple
 from venv_utils import ensure_virtualenv, uv_pip_install
 
@@ -43,7 +43,7 @@ def check_gpu_availability() -> Tuple[bool, str, int]:
 
     except ImportError:
         return False, "PyTorch is not installed", 0
-    except Exception as e:
+    except (AttributeError, RuntimeError) as e:
         return False, f"Error checking GPUs: {e}", 0
 
 
@@ -66,7 +66,7 @@ def check_nccl_availability() -> Tuple[bool, str]:
 
     except ImportError:
         return False, "PyTorch is not installed"
-    except Exception as e:
+    except (AttributeError, RuntimeError) as e:
         return False, f"Error checking NCCL: {e}"
 
 
@@ -114,15 +114,14 @@ def check_accelerate_installation(auto_install: bool = True) -> Tuple[bool, str]
             return False, "Accelerate is not installed (run: uv sync --locked)"
         try:
             uv_pip_install(["accelerate"])
-        except Exception as exc:
+        except subprocess.CalledProcessError as exc:
             return False, f"Accelerate install failed: {exc}"
         try:
             import accelerate
-
-            version = accelerate.__version__
-            return True, f"Accelerate installed (version {version})"
-        except Exception as exc:
+        except ImportError as exc:
             return False, f"Accelerate import failed after install: {exc}"
+        version = accelerate.__version__
+        return True, f"Accelerate installed (version {version})"
 
 
 def validate_accelerate_config(config_path: str, expected_gpus: int) -> Tuple[bool, str]:
@@ -137,36 +136,39 @@ def validate_accelerate_config(config_path: str, expected_gpus: int) -> Tuple[bo
     """
     try:
         import yaml
+    except ImportError as e:
+        return False, f"PyYAML is not installed: {e}"
 
-        with open(config_path, "r") as f:
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
-
-        # Check required fields
-        if "compute_environment" not in config:
-            return False, "Missing 'compute_environment' field"
-
-        if "num_processes" not in config:
-            return False, "Missing 'num_processes' field"
-
-        if config["num_processes"] != expected_gpus:
-            return (
-                False,
-                f"num_processes ({config['num_processes']}) != expected ({expected_gpus})",
-            )
-
-        # Check for distributed training settings (if > 1 GPU)
-        if expected_gpus > 1:
-            if config.get("distributed_type") != "MULTI_GPU":
-                return False, "distributed_type should be MULTI_GPU for multi-GPU training"
-
-        return True, f"Config valid (num_processes={config['num_processes']})"
-
     except yaml.YAMLError as e:
         return False, f"YAML parsing error: {e}"
     except FileNotFoundError:
         return False, "Config file not found"
-    except Exception as e:
-        return False, f"Validation error: {e}"
+
+    if not isinstance(config, dict):
+        return False, "Accelerate config must be a mapping"
+
+    # Check required fields
+    if "compute_environment" not in config:
+        return False, "Missing 'compute_environment' field"
+
+    if "num_processes" not in config:
+        return False, "Missing 'num_processes' field"
+
+    if config["num_processes"] != expected_gpus:
+        return (
+            False,
+            f"num_processes ({config['num_processes']}) != expected ({expected_gpus})",
+        )
+
+    # Check for distributed training settings (if > 1 GPU)
+    if expected_gpus > 1:
+        if config.get("distributed_type") != "MULTI_GPU":
+            return False, "distributed_type should be MULTI_GPU for multi-GPU training"
+
+    return True, f"Config valid (num_processes={config['num_processes']})"
 
 
 def check_training_scripts() -> Tuple[bool, str]:
@@ -211,21 +213,17 @@ def run_smoke_test(gpu_count: int) -> Tuple[bool, str]:
     """
     try:
         import torch
-        import torch.distributed as dist
-
-        # This is a placeholder - actual smoke test would initialize distributed
-        # and verify all ranks can communicate
 
         if gpu_count < 2:
             return True, "Smoke test skipped (single GPU)"
 
-        # Check if we can initialize NCCL (without actually doing it here)
+        # Use NCCL availability as the practical readiness check for multi-GPU runs.
         if torch.distributed.is_nccl_available():
             return True, "Smoke test passed (NCCL available, multi-GPU possible)"
         else:
             return False, "NCCL not available for multi-GPU training"
 
-    except Exception as e:
+    except (AttributeError, RuntimeError) as e:
         return False, f"Smoke test failed: {e}"
 
 

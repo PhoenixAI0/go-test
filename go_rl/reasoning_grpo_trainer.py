@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any
 
 import torch
 from trl import GRPOTrainer
@@ -18,10 +17,10 @@ from .reasoning import (
 class ReasoningGRPOTrainer(GRPOTrainer):
     def __init__(
         self,
-        *args: Any,
+        *args: object,
         reasoning_config: ReasoningConfig | None = None,
         reasoning_model_name: str = "",
-        **kwargs: Any,
+        **kwargs: object,
     ) -> None:
         self.reasoning_config = reasoning_config or ReasoningConfig()
         super().__init__(*args, **kwargs)
@@ -54,8 +53,8 @@ class ReasoningGRPOTrainer(GRPOTrainer):
 
     def _generate_and_score_completions(
         self,
-        inputs: list[dict[str, torch.Tensor | Any]],
-    ) -> dict[str, torch.Tensor | Any]:
+        inputs: list[dict[str, torch.Tensor]],
+    ) -> dict[str, torch.Tensor]:
         output = super()._generate_and_score_completions(inputs)
         if not self.reasoning_config.enabled or not self.reasoning_config.optimize_final_only:
             return output

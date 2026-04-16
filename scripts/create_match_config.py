@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from pathlib import Path
 from venv_utils import ensure_virtualenv
 
 
@@ -241,7 +240,7 @@ def main() -> None:
             model_name=args.model_name,
             katago_name=args.katago_name,
         )
-    except Exception as e:
+    except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
