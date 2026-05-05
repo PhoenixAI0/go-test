@@ -1,0 +1,49 @@
+name: Raspberry Pi CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Go parser and lightweight Python tests
+    runs-on: [self-hosted, Linux, ARM64, raspberrypi]
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install lightweight test dependencies
+        run: |
+          python -m venv .venv-ci
+          .venv-ci/bin/python -m pip install --upgrade pip
+          .venv-ci/bin/python -m pip install pytest pyyaml
+
+      - name: Test Go parser
+        working-directory: go_parser
+        run: go test ./...
+
+      - name: Test Python core
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          .venv-ci/bin/python -m pytest \
+            tests/test_board.py \
+            tests/test_config.py \
+            tests/test_grpo_rewards.py \
+            tests/test_logging_utils.py \
+            tests/test_prompting.py \
+            tests/test_reasoning.py \
+            tests/test_reasoning_masks.py \
+            tests/test_rewards.py \
+            tests/test_rollout.py \
+            tests/test_run_logging.py \
+            tests/test_sgf_utils.py \
+            tests/test_training_utils.py
