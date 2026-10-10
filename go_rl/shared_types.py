@@ -9,7 +9,11 @@ if TYPE_CHECKING:
     from .katago import KataGoResult
 
 
-BoardKey: TypeAlias = tuple[int, str, tuple[tuple[int, ...], ...]]
+BoardKey: TypeAlias = tuple[
+    int, str, tuple[tuple[int, ...], ...],
+    tuple[tuple[str, tuple[int, int] | None], ...],
+    tuple[tuple[int, ...], ...] | None,
+]
 
 
 class KataGoRootInfo(TypedDict, total=False):
@@ -22,7 +26,7 @@ class KataGoMoveInfo(TypedDict, total=False):
 
 
 class KataGoResponse(TypedDict, total=False):
-    id: int
+    id: str
     rootInfo: KataGoRootInfo
     moveInfos: list[KataGoMoveInfo]
 
@@ -73,4 +77,7 @@ def board_key(board: BoardState) -> BoardKey:
         board.size,
         board.next_player(),
         tuple(tuple(row) for row in board.current_board()),
+        tuple(board.moves),  # Identical stones can have different ko/pass history.
+        (tuple(tuple(row) for row in board.previous_board_snapshot)
+         if board.previous_board_snapshot is not None else None),
     )

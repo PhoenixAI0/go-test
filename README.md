@@ -14,52 +14,124 @@ for SFT and GRPO using KataGo-based rewards. Dataset parsing is handled by the G
 - `logs/` run logs.
 - `tests/` pytest suite.
 
-## Quick Start (Linux + NVIDIA GPU)
+## Run the entire training curriculum on CUDA
 
-1. Setup environment (creates `.venv`, installs deps, downloads KataGo, writes `.env`):
+The same command supports **DGX Spark (Linux aarch64)** and **conventional NVIDIA
+GPUs on Linux x86_64 / WSL2**. Setup selects the locked packages automatically:
+
+| Host | PyTorch | CUDA runtime | KataGo evaluator |
+| --- | --- | --- | --- |
+| DGX Spark / aarch64 | 2.9.1 | 13.0 | Native Eigen CPU build |
+| x86_64 NVIDIA machine | 2.9.1 | 12.8 | Native Eigen CPU build |
+
+Use a compatible NVIDIA driver; Spark's CUDA 13 runtime requires driver 580 or
+newer. CUDA runtime libraries come with the Python packages; a separately installed
+CUDA toolkit is not needed. Setup checks actual attention backward and optimizer
+kernels, and the launcher additionally tests the selected quantization kernels.
+
+Put real SGF games in both `data/sgf_9x9/` and `data/sgf_19x19/`, then run:
+
 ```bash
-./scripts/setup_environment.sh
+./scripts/train_cuda.sh
 ```
 
-2. Add SGF files to `data/sgf_9x9/` or `data/sgf_19x19/`.
+This installs the locked Python 3.12 environment, installs Go if needed, builds
+SGF datasets, checks CUDA and KataGo analysis, and trains these stages in order:
 
-3. Build datasets (compiles and uses the Go SGF parser):
+1. 9x9 supervised warm start.
+2. 9x9 position GRPO, loading the SFT adapter.
+3. 19x19 position GRPO, loading the 9x9 adapter.
+4. 19x19 full-game GRPO, loading the 19x19 adapter.
+
+Defaults use `Qwen/Qwen3-8B`, 4-bit LoRA, gradient checkpointing, a per-device
+training batch of one, and non-thinking move completions. The model is downloaded
+from Hugging Face on first use. GPU memory needs depend on the model and sequence
+length; use `--model MODEL_ID` to select a smaller compatible model if needed.
+
+To check installation and one training update per stage without supplying games:
+
 ```bash
-./scripts/prepare_data.sh
+./scripts/train_cuda.sh --smoke --model Qwen/Qwen3-0.6B
 ```
 
-4. Run smoke tests:
+Smoke mode generates tiny synthetic SGFs in its own run directory. These fixtures
+are only for testing the pipeline, not training a useful player. Smoke runs still
+load the selected model and require a CUDA GPU.
+
+Useful options:
+
 ```bash
-./scripts/train_sft.sh --smoke
-./scripts/train_grpo.sh --smoke
+./scripts/train_cuda.sh --dry-run              # No installation or GPU needed
+./scripts/train_cuda.sh --skip-setup           # Reuse the installed environment
+./scripts/train_cuda.sh --sgf-9x9 /games/9 --sgf-19x19 /games/19
+./scripts/train_cuda.sh --skip-fullgame        # Stop after position GRPO
+CUDA_VISIBLE_DEVICES=1 ./scripts/train_cuda.sh --skip-setup
+./scripts/train_cuda.sh --quantization-bits 16 --optimizer adamw  # BF16/FP16 LoRA
 ```
 
-5. Run the full pipeline (default includes 9x9 GRPO -> promotion gate -> 19x19 GRPO -> 19x19 full-game GRPO when the second gate passes):
+Each run writes its datasets, resolved configs, logs, and adapters under a new
+`outputs/cuda_TIMESTAMP/` directory (`outputs/smoke_TIMESTAMP/` for smoke mode).
+Use `--output-dir PATH` to choose an empty destination. The final adapter is in
+`grpo_fullgame_19x19/`, or `grpo_19x19/` with `--skip-fullgame`. A failed stage stops
+the pipeline; it does not train subsequent stages from stale checkpoints. This
+launcher starts fresh runs, not optimizer-state resumes.
+
+Setup uses KataGo's CPU Eigen build to reserve GPU memory for the language model
+and avoid a separate CUDA/cuDNN installation for the evaluator. CPU evaluation
+can make full-game training slow. Existing `KATAGO_BIN` and `KATAGO_MODEL` settings
+in `.env` are preserved, so an installed GPU KataGo can also be used. The launcher
+sources `.env` automatically. Both platforms build KataGo from pinned source with CMake,
+Eigen3 and zlib. Setup installs missing build packages automatically on Debian/Ubuntu
+when running as root or with passwordless sudo. Otherwise install them once:
+
 ```bash
-./scripts/run_full_pipeline.sh \
-  --model-command-template "uv run python /path/to/your_gtp_engine.py --model {MODEL_DIR}"
+sudo apt-get update
+sudo apt-get install -y build-essential cmake libeigen3-dev zlib1g-dev
 ```
 
-To skip all evaluation and promotion-gate checks, pass `--no-eval`.
-To skip the full-game stage only, pass `--skip-fullgame`.
+Standard Linux runtime libraries (including libgomp) and network access for initial
+downloads are required. When moving a checkout between machines, recreate `.venv`
+and remove stale machine-specific KataGo paths from `.env`. Keep your SGFs and
+checkpoints. Architecture-specific KataGo installs are stored separately.
 
-6. Run the full pipeline with automatic Hub publish:
+Training uses Transformers, PEFT and TRL on both platforms, with SDPA attention and
+bitsandbytes NF4 by default. It no longer depends on Unsloth, custom FlashAttention
+builds, or vLLM. Remove the obsolete `grpo_mini_batch` and
+`grpo_logit_chunk_multiplier` keys from custom configs. Legacy FP8/dynamic-4bit
+flags are rejected explicitly. `--quantization-bits 16 --optimizer adamw` uses
+BF16 where supported and FP16 otherwise; it needs more memory than 4-bit LoRA.
+The whole-curriculum launcher uses one GPU. Individual stage scripts support DDP;
+it does not orchestrate a cluster of linked Sparks.
+
+W&B is off unless `--wandb` is supplied. Match evaluation, promotion gates, and
+Hub publishing are separate from this training-only launcher. The existing
+`run_full_pipeline.sh` supports those workflows with a user-supplied GTP model
+engine via `--model-command-template`; it can also run with `--no-eval`.
+
+## Validation
+
 ```bash
-./scripts/run_full_pipeline.sh \
-  --model-command-template "uv run python /path/to/your_gtp_engine.py --model {MODEL_DIR}" \
-  --upload-to-hub \
-  --hf-repo-id username/go-rl-grpo
+uv sync --locked --extra dev
+uv run pytest -m "not katago"
 ```
 
-If you want to verify your setup at any point:
-```bash
-./scripts/verify_setup.sh
-```
+The suite includes actual one-step TRL/PEFT training and adapter saves using a tiny
+local CPU model, using the production loader and checking adapter weights after
+reload. Only KataGo is substituted in these trainer tests. Both Linux dependency
+plans have been resolved, but CUDA execution needs verification on the target
+hardware: run `./scripts/train_cuda.sh --smoke --model Qwen/Qwen3-0.6B` on each
+machine before a full run. KataGo integration tests
+require the paths from `.env` (`set -a; source .env; set +a`).
+
+The integrations follow the pinned [TRL 0.24 trainer APIs](https://huggingface.co/docs/trl/v0.24.0/grpo_trainer),
+[PyTorch 2.9 ARM/CUDA support](https://pytorch.org/blog/pytorch-2-9/),
+[bitsandbytes 0.49.2 platform matrix](https://github.com/bitsandbytes-foundation/bitsandbytes/blob/0.49.2/docs/source/installation.mdx),
+and [KataGo analysis protocol](https://github.com/lightvector/KataGo/blob/v1.15.3/docs/Analysis_Engine.md).
 
 ## Manual Setup
 
 Requirements:
-- Python 3.12+
+- Python 3.12 or 3.13 (the launcher uses 3.12)
 - NVIDIA GPU with CUDA for training (setup script is optimized for Linux)
 - KataGo binary + model + config (the setup script creates `.env` with paths)
 

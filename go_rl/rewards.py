@@ -92,6 +92,10 @@ def is_legal_coords(
         return board.is_basic_legal(coords)
     if level == LegalityLevel.KO:
         return board.is_strict_legal(player, coords)
+    from .board import _STONE, _apply_strict_move
+
+    if not board.is_basic_legal(coords):
+        return False
     try:
         current, previous, history = _strict_state_with_history(board)
         color = _STONE.get(player.upper())

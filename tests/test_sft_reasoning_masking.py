@@ -21,6 +21,10 @@ def _load_script_module(filename: str, module_name: str):
 
 class _Tokenizer:
     eos_token = ""
+    eos_token_id = None
+
+    def encode(self, text, add_special_tokens=False):
+        return [ord(ch) for ch in text]
 
     def apply_chat_template(self, messages, tokenize, add_generation_prompt=False, return_dict=False, **kwargs):
         text = ""
@@ -99,3 +103,22 @@ def test_sft_reasoning_disabled_keeps_full_completion_mask():
     prompt_len = len(PROMPT)
     completion_mask = processed["completion_mask"][prompt_len:]
     assert all(v == 1 for v in completion_mask)
+
+
+def test_sft_generation_prefix_and_single_eos_are_preserved():
+    module = _load_script_module("run_sft.py", "sft_prefix_regression")
+
+    class PrefixTokenizer(_Tokenizer):
+        eos_token_id = 0
+        eos_token = "<eos>"
+
+        def apply_chat_template(self, messages, **kwargs):
+            assert kwargs["add_generation_prompt"]
+            return self.encode(messages[0]["content"] + "<think></think>")
+
+    tokenizer = PrefixTokenizer()
+    sample = module._convert_to_messages({"prompt": "board", "response": "D4"}, tokenizer.eos_token)
+    output = module._add_reasoning_completion_mask(sample, tokenizer, "qwen3", "mask_all", True, True, {})
+    boundary = len("board<think></think>")
+    assert output["input_ids"] == tokenizer.encode("board<think></think>D4") + [0]
+    assert output["completion_mask"] == [0] * boundary + [1, 1, 1]

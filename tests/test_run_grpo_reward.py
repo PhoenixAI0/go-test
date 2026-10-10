@@ -125,3 +125,27 @@ def test_run_grpo_reward_reasoning_prefixed_same_as_plain(monkeypatch):
         completions=["D4", "<think>analysis</think> D4"],
     )
     assert rewards[0] == rewards[1]
+
+
+def test_reward_uses_black_perspective_for_both_sides(monkeypatch):
+    import pytest
+    module = _load_script_module("run_grpo.py", "reward_perspective")
+    monkeypatch.setenv("LOCAL_RANK", "1")
+    reward = module.build_reward_fn(_BatchOnlyKataGo(), RewardConfig(), RolloutConfig())
+    scores = reward(prompts=[PROMPT, PROMPT.replace("to_play: B", "to_play: W")],
+                    completions=["D4", "D4"])
+    assert scores == pytest.approx([0.21, 0.19])
+
+
+def test_reward_scores_original_board_when_prompt_is_chat_rendered():
+    module = _load_script_module("run_grpo.py", "reward_chat_prompt")
+    reward = module.build_reward_fn(_BatchOnlyKataGo(), RewardConfig(), RolloutConfig())
+    assert reward(prompts=["<chat>...</chat>"], completions=["D4"], board_prompt=[PROMPT])[0] > 0
+
+
+def test_reward_penalizes_suicide_without_crashing():
+    from go_rl.board import BoardState
+    module = _load_script_module("run_grpo.py", "reward_suicide")
+    board = BoardState.from_matrix(3, [[0, 2, 0], [2, 0, 2], [0, 2, 0]], "B")
+    reward = module.build_reward_fn(_BatchOnlyKataGo(), RewardConfig(), RolloutConfig())
+    assert reward(prompts=[board.to_prompt()], completions=["B2"]) == [-1.0]

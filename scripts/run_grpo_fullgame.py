@@ -37,7 +37,9 @@ from go_rl.training_utils import (
     default_num_workers,
     get_distributed_context,
     get_optimal_attention_backend,
-    quantization_kwargs,
+    load_training_model,
+    precision_kwargs,
+    render_training_prompt,
 )
 from go_rl.wandb_utils import (
     configure_wandb,
@@ -83,40 +85,29 @@ def build_fullgame_reward_fn(
         "illegal": 0,
         "fallback_passes": 0,
     }
-    rng = random.Random(seed)
     analysis_cache: OrderedDict[BoardKey, KataGoResult] = OrderedDict()
     analysis_cache_max_size = 4096
 
     def reward_fn(prompts: list[str], completions: list[str], **_: object) -> list[float]:
-        local_rank, _, _ = get_distributed_context()
-        if local_rank != 0:
-            raise RuntimeError(
-                f"Reward function called on non-main process (rank {local_rank}). "
-                "This should never happen - rewards must be computed on rank 0 only."
-            )
-
         if katago is None:
-            raise RuntimeError(
-                "KataGo not initialized on rank 0. This is a configuration error. "
-                "Ensure KataGo client is started before creating the reward function."
-            )
-
+            raise RuntimeError("KataGo must be initialized on every training rank.")
+        prompts = _.get("board_prompt", prompts)
+        if len(prompts) != len(completions):
+            raise ValueError("Prompts and completions must have matching lengths.")
         rewards: list[float] = []
         for prompt, completion in zip(prompts, completions):
             try:
-                board = _build_seed_board(prompt, full_cfg, rng)
+                board = parse_prompt(prompt)
             except ValueError:
                 logger.debug("Failed to parse seed prompt", exc_info=True)
                 rewards.append(float(reward_cfg.illegal_penalty))
                 continue
 
-            model_color = choose_model_color(
-                board=board,
-                fullgame_cfg=full_cfg,
-                episode_index=state["episode_index"],
-            )
+            # Score the exact position and side used to generate this completion.
+            # Resampling here changes the task after the policy has acted.
+            model_color = board.next_player()
             state["episode_index"] += 1
-            episode_board = align_board_to_player_turn(board, model_color)
+            episode_board = board
 
             result = simulate_full_game(
                 board=episode_board,
@@ -184,23 +175,23 @@ def main() -> None:
     parser.add_argument(
         "--use-fp8",
         action="store_true",
-        help="Use FP8 quantization (1.4x faster RL inference, 60%% less VRAM, 2x longer context)",
+        help="Unsupported legacy option; use quantization_bits: 4 instead",
     )
     parser.add_argument(
         "--use-dynamic-4bit",
         action="store_true",
-        help="Use Unsloth Dynamic 4-bit quantization (best accuracy, <10%% more VRAM than BnB)",
+        help="Unsupported legacy option; use standard quantization_bits: 4",
     )
     parser.add_argument(
         "--attention-backend",
-        choices=["sdpa", "flash_attention_2", "xformers", "auto"],
+        choices=["sdpa", "flash_attention_2", "auto"],
         default="auto",
-        help="Attention backend (auto=SDPA on new GPUs, FA2 on old GPUs)",
+        help="Attention backend (auto=SDPA)",
     )
     parser.add_argument(
         "--enable-compile",
         action="store_true",
-        help="Enable torch.compile for 10%% faster training + 2x faster compile time",
+        help="Enable torch.compile in the trainer",
     )
     parser.add_argument(
         "--max-plies",
@@ -255,7 +246,6 @@ def main() -> None:
     try:
         from datasets import load_dataset
         from trl import GRPOConfig
-        from unsloth import FastLanguageModel
     except ImportError as exc:
         raise RuntimeError("Missing dependencies for GRPO training.") from exc
 
@@ -292,8 +282,6 @@ def main() -> None:
         "gradient_checkpointing": args.gradient_checkpointing,
         "attention_backend": attention_backend or "default",
         "torch_compile": args.enable_compile,
-        "grpo_mini_batch": train_cfg.grpo_mini_batch,
-        "grpo_logit_chunk_multiplier": train_cfg.grpo_logit_chunk_multiplier,
         "num_samples": rollout_cfg.num_samples,
         "temperature": rollout_cfg.temperature,
         "reward_config": asdict(reward_cfg),
@@ -304,8 +292,6 @@ def main() -> None:
         wandb_tags.extend(["fp8", "fp8-rl"])
     if args.enable_compile:
         wandb_tags.append("torch-compile")
-    if train_cfg.grpo_mini_batch or train_cfg.grpo_logit_chunk_multiplier:
-        wandb_tags.append("memory-optimized")
 
     wandb_enabled = configure_wandb(
         args.wandb,
@@ -319,39 +305,11 @@ def main() -> None:
     )
 
     logger.info("Loading model %s with %s quantization", train_cfg.model_name, quant_type)
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=train_cfg.model_name,
-        max_seq_length=train_cfg.max_seq_length,
-        dtype=None,
-        **quantization_kwargs(
-            train_cfg.quantization_bits,
-            use_dynamic=args.use_dynamic_4bit,
-            use_fp8=args.use_fp8,
-        ),
-        fast_inference=True,
+    model, tokenizer = load_training_model(
+        train_cfg, attention_backend=attention_backend,
+        gradient_checkpointing=args.gradient_checkpointing,
+        use_dynamic=args.use_dynamic_4bit, use_fp8=args.use_fp8,
     )
-
-    if train_cfg.use_lora:
-        model = FastLanguageModel.get_peft_model(
-            model,
-            r=train_cfg.lora_rank if train_cfg.lora_rank else 64,
-            target_modules=[
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj",
-            ],
-            lora_alpha=train_cfg.lora_alpha,
-            lora_dropout=train_cfg.lora_dropout,
-            bias="none",
-            use_gradient_checkpointing="unsloth" if args.gradient_checkpointing else False,
-            random_state=train_cfg.seed,
-            use_rslora=False,
-            loftq_config=None,
-        )
 
     logger.info("Loading dataset from %s", dataset_path)
     dataset = load_dataset("json", data_files=dataset_path, split="train")
@@ -359,6 +317,18 @@ def main() -> None:
         smoke_count = min(len(dataset), 32)
         logger.info("Smoke run enabled: using %d rows", smoke_count)
         dataset = dataset.select(range(smoke_count))
+    seed_rng = random.Random(train_cfg.seed)
+    def prepare_seed(example, index):
+        board = _build_seed_board(example["prompt"], full_cfg, seed_rng)
+        color = choose_model_color(board, full_cfg, index)
+        return {"prompt": align_board_to_player_turn(board, color).to_prompt()}
+
+    dataset = dataset.map(prepare_seed, with_indices=True, load_from_cache_file=False)
+    dataset = dataset.map(
+        render_training_prompt,
+        fn_kwargs={"tokenizer": tokenizer, "reasoning_cfg": train_cfg.reasoning,
+                   "model_name": train_cfg.model_name},
+    )
     logger.info("Dataset rows: %d", len(dataset))
 
     local_rank, world_size, is_main_process = get_distributed_context()
@@ -368,16 +338,9 @@ def main() -> None:
 
     katago: Optional[KataGoService] = None
     try:
-        if is_main_process:
-            katago = build_katago_service(katago_cfg)
-            logger.info("Starting KataGo on main process (rank %d/%d)", local_rank, world_size)
-            katago.start()
-            if katago_cfg.katago_pool_size > 1:
-                logger.info("KataGo worker pool enabled with %d workers", katago_cfg.katago_pool_size)
-            logger.info("KataGo client initialized successfully on rank 0")
-        else:
-            logger.info("Skipping KataGo on worker process (rank %d/%d)", local_rank, world_size)
-            logger.info("Reward computation will be handled by rank 0 and broadcasted")
+        # TRL invokes reward functions on each rank's local completions.
+        katago = build_katago_service(katago_cfg)
+        katago.start()
 
         Path(train_cfg.output_dir).mkdir(parents=True, exist_ok=True)
         log_path = write_run_log(
@@ -402,14 +365,14 @@ def main() -> None:
                     "mode": args.wandb_mode,
                 },
             },
-            packages=["datasets", "trl", "unsloth", "torch", "transformers"],
+            packages=["datasets", "trl", "peft", "torch", "transformers"],
         )
         logger.info("Wrote run log to %s", log_path)
 
         num_workers = default_num_workers()
         trainer_args = {
             "output_dir": train_cfg.output_dir,
-            "max_seq_length": train_cfg.max_seq_length,
+            "max_prompt_length": train_cfg.max_seq_length - rollout_cfg.max_tokens,
             "num_train_epochs": 1,
             "per_device_train_batch_size": train_cfg.batch_size,
             "gradient_accumulation_steps": train_cfg.gradient_accumulation,
@@ -421,20 +384,18 @@ def main() -> None:
             "logging_steps": 1 if args.smoke else 10,
             "dataloader_num_workers": num_workers,
             "dataloader_pin_memory": True,
+            "seed": train_cfg.seed,
+            "report_to": [],
+            "torch_compile": args.enable_compile,
+            **precision_kwargs(train_cfg.quantization_bits),
         }
         max_steps = 1 if args.smoke else train_cfg.num_steps
         trainer_args["max_steps"] = max_steps if max_steps > 0 else -1
 
-        if train_cfg.grpo_mini_batch is not None:
-            trainer_args["unsloth_grpo_mini_batch"] = train_cfg.grpo_mini_batch
-        if train_cfg.grpo_logit_chunk_multiplier is not None:
-            trainer_args["unsloth_logit_chunk_multiplier"] = (
-                train_cfg.grpo_logit_chunk_multiplier
-            )
         if train_cfg.use_8bit_optimizer:
             trainer_args["optim"] = "adamw_8bit"
         if args.gradient_checkpointing:
-            trainer_args["gradient_checkpointing"] = "unsloth"
+            trainer_args["gradient_checkpointing"] = True
             trainer_args["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
         if wandb_enabled:
             trainer_args["report_to"] = ["wandb"]
@@ -478,12 +439,14 @@ def main() -> None:
 
         logger.info("Saving model to %s", train_cfg.output_dir)
         trainer.save_model(train_cfg.output_dir)
+        if trainer.is_world_process_zero():
+            tokenizer.save_pretrained(train_cfg.output_dir)
 
         if wandb_enabled and is_main_process:
             finish_wandb()
 
     finally:
-        if is_main_process and katago is not None:
+        if katago is not None:
             logger.info("Stopping KataGo")
             katago.close()
 

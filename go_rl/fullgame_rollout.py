@@ -81,7 +81,7 @@ def align_board_to_player_turn(board: BoardState, player: str) -> BoardState:
 def _parse_completion_to_move(completion: str, stop_at_pass: bool) -> str:
     stripped = completion.strip()
     if not stripped:
-        return "PASS"
+        return ""
     try:
         return parse_move(stripped)
     except ValueError:
@@ -131,12 +131,18 @@ def generate_model_move(
         "temperature": rollout_cfg.temperature,
         "top_p": rollout_cfg.top_p,
         "pad_token_id": getattr(tokenizer, "eos_token_id", None),
+        "use_cache": True,
     }
     if generation_kwargs:
         gen_kwargs.update(generation_kwargs)
 
-    with torch.no_grad():
-        output_ids = model.generate(**inputs, **gen_kwargs)
+    was_training = model.training
+    model.eval()
+    try:
+        with torch.no_grad():
+            output_ids = model.generate(**inputs, **gen_kwargs)
+    finally:
+        model.train(was_training)
 
     prompt_len = int(inputs["input_ids"].shape[-1])
     completion_tokens = output_ids[0][prompt_len:]

@@ -19,7 +19,8 @@ from go_rl.training_utils import (
     configure_torch_for_speed,
     default_num_workers,
     get_optimal_attention_backend,
-    quantization_kwargs,
+    load_training_model,
+    precision_kwargs,
 )
 from go_rl.wandb_utils import (
     configure_wandb,
@@ -56,7 +57,7 @@ class _MaskedSample(TypedDict):
 def _convert_to_messages(example: _SftExample, eos_token: str) -> _ReasoningSample:
     prompt = example["prompt"]
     response = example["response"]
-    completion = f"{response}{eos_token}"
+    completion = response  # The tokenizer supplies the assistant EOS exactly once.
     return {
         "prompt": [{"role": "user", "content": prompt}],
         "completion": [{"role": "assistant", "content": completion}],
@@ -74,7 +75,6 @@ def _add_reasoning_completion_mask(
     chat_template_kwargs: dict[str, object],
 ) -> _MaskedSample:
     prompt_messages = example["prompt"]
-    completion_messages = example["completion"]
     prompt_ids = tokenizer.apply_chat_template(
         prompt_messages,
         tokenize=True,
@@ -82,18 +82,14 @@ def _add_reasoning_completion_mask(
         return_dict=False,
         **chat_template_kwargs,
     )
-    prompt_completion_processed = tokenizer.apply_chat_template(
-        prompt_messages + completion_messages,
-        tokenize=True,
-        return_dict=True,
-        **chat_template_kwargs,
-    )
     if prompt_ids and isinstance(prompt_ids[0], list):
         prompt_ids = prompt_ids[0]
-    prompt_completion_ids = prompt_completion_processed["input_ids"]
-    if prompt_completion_ids and isinstance(prompt_completion_ids[0], list):
-        prompt_completion_ids = prompt_completion_ids[0]
-    completion_ids = prompt_completion_ids[len(prompt_ids) :]
+    # Some chat templates insert an empty thinking block only in the generation
+    # prefix. Encode the answer separately so the prompt boundary stays exact.
+    completion_ids = tokenizer.encode(example["raw_completion"], add_special_tokens=False)
+    if tokenizer.eos_token_id is not None:
+        completion_ids.append(tokenizer.eos_token_id)
+    prompt_completion_ids = prompt_ids + completion_ids
     if not reasoning_enabled or not optimize_final_only:
         completion_mask = [1] * len(completion_ids)
     else:
@@ -166,23 +162,23 @@ def main() -> None:
     parser.add_argument(
         "--use-fp8",
         action="store_true",
-        help="Use FP8 quantization (1.4x faster, 60%% less VRAM, requires RTX 40/50/H100)",
+        help="Unsupported legacy option; use quantization_bits: 4 instead",
     )
     parser.add_argument(
         "--use-dynamic-4bit",
         action="store_true",
-        help="Use Unsloth Dynamic 4-bit quantization (best accuracy, <10%% more VRAM than BnB)",
+        help="Unsupported legacy option; use standard quantization_bits: 4",
     )
     parser.add_argument(
         "--attention-backend",
-        choices=["sdpa", "flash_attention_2", "xformers", "auto"],
+        choices=["sdpa", "flash_attention_2", "auto"],
         default="auto",
-        help="Attention backend (auto=SDPA on new GPUs, FA2 on old GPUs)",
+        help="Attention backend (auto=SDPA)",
     )
     parser.add_argument(
         "--enable-compile",
         action="store_true",
-        help="Enable torch.compile for 10%% faster training",
+        help="Enable torch.compile in the trainer",
     )
     args = parser.parse_args()
 
@@ -193,7 +189,6 @@ def main() -> None:
     try:
         from datasets import load_dataset
         from trl import SFTConfig, SFTTrainer
-        from unsloth import FastLanguageModel
     except ImportError as exc:
         raise RuntimeError("Missing dependencies for SFT training.") from exc
 
@@ -242,30 +237,10 @@ def main() -> None:
     )
 
     logger.info("Loading model %s with %s quantization", cfg.model_name, quant_type)
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=cfg.model_name,
-        max_seq_length=cfg.max_seq_length,
-        dtype=None,  # Auto-select optimal dtype
-        **quantization_kwargs(
-            cfg.quantization_bits,
-            use_dynamic=args.use_dynamic_4bit,
-            use_fp8=args.use_fp8,
-        ),
-    )
-
-    # Apply LoRA with optimized parameters
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=cfg.lora_rank,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj"],
-        lora_alpha=cfg.lora_alpha,
-        lora_dropout=cfg.lora_dropout,
-        bias="none",
-        use_gradient_checkpointing="unsloth" if args.gradient_checkpointing else False,
-        random_state=cfg.seed,
-        use_rslora=False,
-        loftq_config=None,
+    model, tokenizer = load_training_model(
+        cfg, attention_backend=attention_backend,
+        gradient_checkpointing=args.gradient_checkpointing,
+        use_dynamic=args.use_dynamic_4bit, use_fp8=args.use_fp8,
     )
 
     reasoning_profile = detect_reasoning_profile(
@@ -299,9 +274,13 @@ def main() -> None:
             "optimize_final_only": cfg.reasoning.optimize_final_only,
             "chat_template_kwargs": chat_template_kwargs,
         },
-        remove_columns=["raw_completion", "prompt", "completion"],
+        remove_columns=dataset.column_names,
     )
 
+    # A truncated answer or malformed sample cannot contribute a training loss.
+    dataset = dataset.filter(lambda row: any(row["completion_mask"][:cfg.max_seq_length]))
+    if not len(dataset):
+        raise ValueError("No SFT examples have supervised tokens within max_seq_length.")
     train_dataset = dataset
     eval_dataset = None
     if cfg.eval_split_ratio > 0.0 and len(dataset) > 1:
@@ -338,7 +317,7 @@ def main() -> None:
                 "mode": args.wandb_mode,
             },
         },
-        packages=["datasets", "trl", "unsloth", "torch", "transformers"],
+        packages=["datasets", "trl", "peft", "torch", "transformers"],
     )
     logger.info("Wrote run log to %s", log_path)
     logger.info("Starting SFT training run %s", run_name)
@@ -349,23 +328,27 @@ def main() -> None:
         "per_device_train_batch_size": cfg.batch_size,
         "per_device_eval_batch_size": cfg.batch_size,
         "learning_rate": cfg.learning_rate,
-        "max_seq_length": cfg.max_seq_length,
+        "max_length": cfg.max_seq_length,
         "logging_steps": 1 if args.smoke else 10,
         "max_steps": 1 if args.smoke else -1,
         "dataset_num_proc": num_workers,
         "dataloader_num_workers": num_workers,
         "dataloader_pin_memory": True,
         "completion_only_loss": True,
+        "seed": cfg.seed,
+        "report_to": [],
+        "torch_compile": args.enable_compile,
+        **precision_kwargs(cfg.quantization_bits),
     }
-    # Packing optimization: 3-5x speedup
+    # Packing requires a compatible attention backend.
     if cfg.use_packing:
         trainer_args["packing"] = True
     # 8-bit optimizer for memory efficiency
     if cfg.use_8bit_optimizer:
         trainer_args["optim"] = "adamw_8bit"
-    # Use Unsloth's optimized gradient checkpointing
+    # Use non-reentrant PyTorch gradient checkpointing
     if args.gradient_checkpointing:
-        trainer_args["gradient_checkpointing"] = "unsloth"
+        trainer_args["gradient_checkpointing"] = True
         trainer_args["gradient_checkpointing_kwargs"] = {"use_reentrant": False}
     if eval_dataset is not None:
         trainer_args["eval_strategy"] = "steps"
@@ -415,6 +398,8 @@ def main() -> None:
 
     logger.info("Saving model to %s", cfg.output_dir)
     trainer.save_model(cfg.output_dir)
+    if trainer.is_world_process_zero():
+        tokenizer.save_pretrained(cfg.output_dir)
 
     # Finish wandb run
     if wandb_enabled:

@@ -80,3 +80,9 @@ temp/
 !data/.gitkeep
 !outputs/.gitkeep
 !logs/.gitkeep
+
+# Local parser build and toolchain configuration
+go_parser/sgf_parser
+scripts/go_env.sh
+.pytest_cache/
+match_sgfs/

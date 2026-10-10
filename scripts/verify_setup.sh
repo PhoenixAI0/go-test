@@ -35,7 +35,7 @@ fi
 # Check 2: Python packages (if venv exists)
 if [ -d ".venv" ]; then
     echo -n "2. Python packages: "
-    if uv run python -c "import torch, transformers, datasets, trl, sgfmill" 2>/dev/null; then
+    if uv run --locked python -c "import torch, transformers, datasets, trl, peft, bitsandbytes, sgfmill" 2>/dev/null; then
         echo -e "${GREEN}✓${NC}"
     else
         echo -e "${RED}✗ Missing packages${NC}"
@@ -45,8 +45,8 @@ if [ -d ".venv" ]; then
     
     # Check CUDA
     echo -n "3. PyTorch CUDA: "
-    if uv run python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
-        CUDA_VERSION=$(uv run python -c "import torch; print(torch.version.cuda)")
+    if uv run --locked python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+        CUDA_VERSION=$(uv run --locked python -c "import torch; print(torch.version.cuda)")
         echo -e "${GREEN}✓ (CUDA ${CUDA_VERSION})${NC}"
     else
         echo -e "${RED}✗ Not available${NC}"
@@ -62,8 +62,8 @@ if [ -f .env ]; then
 fi
 
 if [ -n "${KATAGO_BIN:-}" ] && [ -f "$KATAGO_BIN" ]; then
-    if $KATAGO_BIN version &>/dev/null; then
-        KATAGO_VER=$($KATAGO_BIN version | head -n1)
+    if "$KATAGO_BIN" version &>/dev/null; then
+        KATAGO_VER=$("$KATAGO_BIN" version | head -n1)
         echo -e "${GREEN}✓ (${KATAGO_VER})${NC}"
     else
         echo -e "${YELLOW}⚠ Binary found but not working${NC}"
@@ -98,7 +98,7 @@ fi
 
 # Check 7: SGF files
 echo -n "7. SGF files (9x9): "
-SGF_9x9_COUNT=$(find data/sgf_9x9 -name "*.sgf" 2>/dev/null | wc -l | tr -d ' ')
+SGF_9x9_COUNT=$(find data/sgf_9x9 -name "*.sgf" 2>/dev/null | wc -l | tr -d ' ' || true)
 if [ "$SGF_9x9_COUNT" -gt 0 ]; then
     echo -e "${GREEN}✓ ($SGF_9x9_COUNT files)${NC}"
 else
@@ -108,7 +108,7 @@ else
 fi
 
 echo -n "8. SGF files (19x19): "
-SGF_19x19_COUNT=$(find data/sgf_19x19 -name "*.sgf" 2>/dev/null | wc -l | tr -d ' ')
+SGF_19x19_COUNT=$(find data/sgf_19x19 -name "*.sgf" 2>/dev/null | wc -l | tr -d ' ' || true)
 if [ "$SGF_19x19_COUNT" -gt 0 ]; then
     echo -e "${GREEN}✓ ($SGF_19x19_COUNT files)${NC}"
 else

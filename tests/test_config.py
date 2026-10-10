@@ -299,8 +299,6 @@ def test_training_config_defaults():
     assert config.lora_alpha == 16
     assert config.lora_dropout == 0.0
     assert config.use_lora is True
-    assert config.grpo_mini_batch == 1
-    assert config.grpo_logit_chunk_multiplier == 4
     assert config.use_8bit_optimizer is True
     assert config.quantization_bits == 8
     assert isinstance(config.reasoning, ReasoningConfig)
@@ -552,3 +550,13 @@ seed_empty_board_prob: 0.25
     assert config.enabled is True
     assert config.max_plies == 120
     assert config.seed_empty_board_prob == 0.25
+
+
+@pytest.mark.parametrize("cls,kwargs", [
+    (TrainingConfig, {"model_name": "test", "output_dir": "out"}),
+    (SftConfig, {"model_name": "test", "output_dir": "out", "dataset_path": "data"}),
+])
+def test_learning_rate_accepts_yaml_scientific_notation(cls, kwargs):
+    assert cls(**kwargs, learning_rate="5e-5").learning_rate == 5e-5
+    with pytest.raises(ValueError, match="finite positive"):
+        cls(**kwargs, learning_rate="nan")

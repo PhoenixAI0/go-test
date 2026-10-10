@@ -177,6 +177,8 @@ def test_katago_start_process_with_cuda_override(mock_popen, katago_config):
         "/models/kata.bin.gz",
         "-config",
         "/config/gtp.cfg",
+        "-override-config",
+        "reportAnalysisWinratesAs=BLACK",
     ]
     assert kwargs["env"]["CUDA_VISIBLE_DEVICES"] == "1"
     assert client._stdout_thread is not None
@@ -223,7 +225,7 @@ def test_katago_send_success(mock_popen, katago_config):
 
     payload = {"id": 1, "boardXSize": 9, "boardYSize": 9}
     result = client._send(payload)
-    assert result["id"] == 1
+    assert result["id"] == "1"
     assert result["rootInfo"]["winrate"] == 0.5
     client.close()
 
@@ -415,3 +417,48 @@ def test_katago_choose_move_fallback_pass(mock_popen, katago_config):
     board = BoardState.empty(9)
     assert client.choose_move(board, player="B") == "PASS"
     client.close()
+
+
+@patch("subprocess.Popen")
+def test_katago_sends_string_ids_and_reports_engine_errors(mock_popen, katago_config):
+    def on_request(payload, proc):
+        assert isinstance(payload["id"], str)
+        proc.stdout.push(json.dumps({"id": payload["id"], "error": "illegal position"}) + "\n")
+
+    mock_popen.return_value = _FakeProcess(on_request=on_request)
+    client = KataGoAnalysisClient(katago_config)
+    client.start()
+    try:
+        with pytest.raises(RuntimeError, match="illegal position"):
+            client.analyze_position(BoardState.empty(9))
+    finally:
+        client.close()
+
+
+@patch("subprocess.Popen")
+def test_katago_waits_for_final_analysis(mock_popen, katago_config):
+    def on_request(payload, proc):
+        for interim, winrate in [(True, 0.1), (False, 0.8)]:
+            proc.stdout.push(json.dumps({"id": payload["id"], "isDuringSearch": interim,
+                                        "rootInfo": {"winrate": winrate}}) + "\n")
+
+    mock_popen.return_value = _FakeProcess(on_request=on_request)
+    client = KataGoAnalysisClient(katago_config)
+    client.start()
+    try:
+        assert client.analyze_position(BoardState.empty(9)).winrate == 0.8
+    finally:
+        client.close()
+
+
+def test_engine_exit_preserves_completed_results_and_failed_handles(katago_config):
+    client = KataGoAnalysisClient(katago_config)
+    done = client._register_pending(1)
+    done.response = {"id": "1", "rootInfo": {"winrate": 0.7}}
+    done.event.set()
+    client._register_pending(2)
+    client._fail_all_pending(RuntimeError("engine exited"))
+    assert client._await_raw_result(1)["rootInfo"]["winrate"] == 0.7
+    with pytest.raises(RuntimeError, match="engine exited"):
+        client._await_raw_result(2)
+    assert not client._pending

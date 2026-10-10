@@ -79,3 +79,20 @@ def test_detect_reasoning_profile_warns_and_defaults_on_ambiguous_markers(caplog
 def test_detect_reasoning_profile_fallback_plain():
     profile = detect_reasoning_profile("some/unknown-model", _Tokenizer(), "auto")
     assert profile == "plain"
+
+
+def test_qwen_completion_with_opening_tag_in_prompt():
+    assert extract_final_answer("analysis</think> D4", "qwen3") == ("D4", True, False)
+
+
+def test_thinking_controls_are_not_generation_kwargs():
+    from go_rl.config import ReasoningConfig
+    from go_rl.reasoning import build_generation_kwargs
+    assert build_generation_kwargs(ReasoningConfig(), "qwen3") == {}
+
+
+def test_qwen_profile_survives_local_adapter_path():
+    class Qwen2TokenizerFast:
+        name_or_path = "outputs/cuda_run/grpo_9x9"
+
+    assert detect_reasoning_profile("outputs/cuda_run/grpo_9x9", Qwen2TokenizerFast(), "auto") == "qwen3"

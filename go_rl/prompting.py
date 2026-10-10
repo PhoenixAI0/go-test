@@ -57,8 +57,6 @@ def _parse_matrix_prompt(lines: list[str], size: int) -> BoardState:
         row_text = line.replace(" ", "").upper()
         if not row_text:
             continue
-        if row_text.isalpha() and len(row_text) == size:
-            continue
         if ":" in row_text:
             continue
         if row_text and row_text[0].isdigit():
@@ -114,7 +112,7 @@ def build_generation_inputs(
                 return_dict=True,
                 **chat_kwargs,
             )
-            if isinstance(rendered, dict):
+            if isinstance(rendered, Mapping):
                 return rendered
         except TypeError:
             pass

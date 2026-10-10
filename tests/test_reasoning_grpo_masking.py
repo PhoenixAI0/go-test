@@ -17,6 +17,7 @@ class _Tokenizer:
 
 class _Model:
     training = True
+    is_gradient_checkpointing = False
 
 
 def _tensor_ids(text: str) -> torch.Tensor:

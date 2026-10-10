@@ -7,7 +7,6 @@ import subprocess
 import threading
 from dataclasses import dataclass
 from collections.abc import Iterable
-from time import sleep
 from typing import Optional, cast
 
 from .board import BoardState, GtpParseError, coords_to_gtp, gtp_to_coords
@@ -41,6 +40,7 @@ class KataGoAnalysisClient:
         self._pending_lock = threading.RLock()
         self._pending: dict[int, _PendingRequest] = {}
         self._shutdown_event = threading.Event()
+        self._pending_ready = threading.Event()
         self._next_id = 1
         self._stderr_thread: Optional[threading.Thread] = None
         self._stdout_thread: Optional[threading.Thread] = None
@@ -56,6 +56,8 @@ class KataGoAnalysisClient:
             self.config.model_path,
             "-config",
             self.config.config_path,
+            "-override-config",
+            "reportAnalysisWinratesAs=BLACK",
         ]
         env = os.environ.copy()
         if self.config.katago_cuda_visible_devices:
@@ -89,11 +91,13 @@ class KataGoAnalysisClient:
         process = self._process
         self._process = None
         self._shutdown_event.set()
+        self._pending_ready.set()
         try:
             process.terminate()
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+            process.wait(timeout=5)
         finally:
             if process.stdin:
                 process.stdin.close()
@@ -126,8 +130,10 @@ class KataGoAnalysisClient:
         while not self._shutdown_event.is_set():
             with self._pending_lock:
                 has_pending = bool(self._pending)
+                if not has_pending:
+                    self._pending_ready.clear()
             if not has_pending:
-                sleep(0.001)
+                self._pending_ready.wait()
                 continue
             line = process.stdout.readline()
             if line == "":
@@ -151,6 +157,8 @@ class KataGoAnalysisClient:
                 continue
             response = cast(KataGoResponse, response)
             req_id = response.get("id")
+            if isinstance(req_id, str) and req_id.isdecimal():
+                req_id = int(req_id)
             if not isinstance(req_id, int):
                 logger.warning("KataGo response missing integer id: %r", response)
                 continue
@@ -159,16 +167,22 @@ class KataGoAnalysisClient:
             if pending is None:
                 logger.debug("Ignoring response for unknown request id=%s", req_id)
                 continue
+            if response.get("isDuringSearch"):
+                continue
+            if "error" in response:
+                pending.error = RuntimeError(f"KataGo rejected request {req_id}: {response['error']}")
             pending.response = response
             pending.event.set()
 
     def _fail_all_pending(self, error: BaseException) -> None:
         with self._pending_lock:
             pending_entries = list(self._pending.values())
-            self._pending.clear()
-        for pending in pending_entries:
-            pending.error = error
-            pending.event.set()
+            # Keep handles until their caller awaits them, even if the engine
+            # exits between submit and await. Never replace a completed result.
+            for pending in pending_entries:
+                if not pending.event.is_set():
+                    pending.error = error
+                    pending.event.set()
 
     def _next_request_id(self) -> int:
         with self._write_lock:
@@ -182,6 +196,7 @@ class KataGoAnalysisClient:
             if req_id in self._pending:
                 raise RuntimeError(f"Duplicate request id: {req_id}")
             self._pending[req_id] = pending
+            self._pending_ready.set()
         return pending
 
     def _write_payload(self, payload: dict[str, object]) -> None:
@@ -190,7 +205,8 @@ class KataGoAnalysisClient:
         if self._process.stdin is None or self._process.stdout is None:
             raise RuntimeError("KataGo process streams are unavailable.")
         logger.debug("Sending KataGo request id=%s", payload.get("id"))
-        self._process.stdin.write(json.dumps(payload) + "\n")
+        # The public Python handles are integers; KataGo's wire protocol requires strings.
+        self._process.stdin.write(json.dumps({**payload, "id": str(payload["id"])}) + "\n")
         self._process.stdin.flush()
 
     def _submit_payload(self, payload: dict[str, object]) -> int:
@@ -228,7 +244,7 @@ class KataGoAnalysisClient:
         with self._pending_lock:
             self._pending.pop(req_id, None)
         if pending.error is not None:
-            raise RuntimeError(f"KataGo request {req_id} failed.") from pending.error
+            raise RuntimeError(f"KataGo request {req_id} failed: {pending.error}") from pending.error
         if pending.response is None:
             raise RuntimeError("KataGo returned empty response.")
         logger.debug("Received KataGo response id=%s", req_id)

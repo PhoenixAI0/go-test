@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import InitVar, dataclass, field
 from pathlib import Path
@@ -138,13 +139,14 @@ class TrainingConfig:
     lora_alpha: int = 16
     lora_dropout: float = 0.0
     use_lora: bool = True
-    grpo_mini_batch: Optional[int] = 1
-    grpo_logit_chunk_multiplier: Optional[int] = 4
     use_8bit_optimizer: bool = True
     quantization_bits: int = 8
     reasoning: ReasoningConfig = field(default_factory=ReasoningConfig)
 
     def __post_init__(self) -> None:
+        self.learning_rate = float(self.learning_rate)
+        if not math.isfinite(self.learning_rate) or self.learning_rate <= 0:
+            raise ValueError("learning_rate must be a finite positive number.")
         self.output_dir = _expand_path(self.output_dir)
         self.log_dir = _expand_path(self.log_dir)
         if isinstance(self.reasoning, dict):
@@ -178,6 +180,9 @@ class SftConfig:
 
     def __post_init__(self) -> None:
         self.dataset_path = _expand_path(self.dataset_path)
+        self.learning_rate = float(self.learning_rate)
+        if not math.isfinite(self.learning_rate) or self.learning_rate <= 0:
+            raise ValueError("learning_rate must be a finite positive number.")
         self.output_dir = _expand_path(self.output_dir)
         self.log_dir = _expand_path(self.log_dir)
         if isinstance(self.reasoning, dict):

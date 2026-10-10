@@ -30,6 +30,7 @@ fi
 ./scripts/compile_go_parser.sh
 
 # Check if SGF files exist
+mkdir -p data/sgf_9x9 data/sgf_19x19
 SGF_9x9_COUNT=$(find data/sgf_9x9 -name "*.sgf" 2>/dev/null | wc -l)
 SGF_19x19_COUNT=$(find data/sgf_19x19 -name "*.sgf" 2>/dev/null | wc -l)
 

@@ -82,7 +82,7 @@ def test_build_fullgame_reward_fn_returns_scalar_per_sample(monkeypatch):
     assert rewards == [1.25, 1.25]
 
 
-def test_fullgame_reward_fn_rank_zero_only(monkeypatch):
+def test_fullgame_reward_fn_runs_on_worker_rank(monkeypatch):
     module = _load_script_module("run_grpo_fullgame.py", "run_grpo_fullgame_script_rank")
     monkeypatch.setenv("LOCAL_RANK", "1")
 
@@ -96,8 +96,10 @@ def test_fullgame_reward_fn_rank_zero_only(monkeypatch):
         seed=123,
     )
 
-    with pytest.raises(RuntimeError, match="rank 1"):
-        reward_fn(prompts=[_prompt()], completions=["D4"])
+    from types import SimpleNamespace
+    monkeypatch.setattr(module, "simulate_full_game", lambda **kwargs: SimpleNamespace(
+        total_reward=0.5, truncated=False, terminated_by_illegal=False, katago_fallback_passes=0))
+    assert reward_fn(prompts=[_prompt()], completions=["D4"]) == [0.5]
 
 
 def test_fullgame_reward_fn_uses_configured_max_plies(monkeypatch):
@@ -213,3 +215,22 @@ def test_existing_run_grpo_still_exports_reward_builder():
     module = _load_script_module("run_grpo.py", "run_grpo_script_existing")
     assert hasattr(module, "build_reward_fn")
     assert callable(module.build_reward_fn)
+
+
+def test_fullgame_reward_keeps_generated_position_and_side(monkeypatch):
+    from types import SimpleNamespace
+    from go_rl.board import BoardState
+    module = _load_script_module("run_grpo_fullgame.py", "reward_unchanged_board")
+    board = BoardState.empty(9)
+    board.apply_move("B", "D4")
+    observed = []
+
+    def simulate(**kwargs):
+        observed.append((kwargs["board"].to_prompt(), kwargs["model_color"]))
+        return SimpleNamespace(total_reward=0, truncated=False, terminated_by_illegal=False, katago_fallback_passes=0)
+
+    monkeypatch.setattr(module, "simulate_full_game", simulate)
+    reward = module.build_fullgame_reward_fn(object(), object(), _NoopKataGo(), RewardConfig(),
+        RolloutConfig(), FullGameConfig(seed_empty_board_prob=1, model_color_mode="black"), seed=123)
+    reward([board.to_prompt()] * 2, ["F6", "F6"])
+    assert observed == [(board.to_prompt(), "W")] * 2

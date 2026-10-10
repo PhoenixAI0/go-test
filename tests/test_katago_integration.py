@@ -70,9 +70,10 @@ class TestRealKataGo:
             client.close()
             assert client._process is None
 
-    def test_real_katago_analysis(self, skip_if_no_katago, real_katago_config):
+    @pytest.mark.parametrize("board_size", [9, 19])
+    def test_real_katago_analysis(self, skip_if_no_katago, real_katago_config, board_size):
         client = KataGoAnalysisClient(real_katago_config)
-        board = BoardState(size=9)
+        board = BoardState(size=board_size)
 
         try:
             client.start()
@@ -84,7 +85,9 @@ class TestRealKataGo:
             assert "rootInfo" in result.raw
             assert "winrate" in result.raw["rootInfo"]
 
-            assert 0.4 <= result.winrate <= 0.6
+            # Komi and board size can strongly favor one side on an empty board.
+            assert result.score_lead is not None
+            assert result.best_move is not None
 
         finally:
             client.close()

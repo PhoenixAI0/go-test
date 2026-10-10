@@ -202,3 +202,13 @@ def test_evaluate_move_various_scenarios(move, is_legal, winrate_delta, game_res
     assert breakdown.total == (
         breakdown.winrate + breakdown.legality + breakdown.length + breakdown.outcome
     )
+
+
+def test_superko_validates_moves_without_name_error():
+    from go_rl.rewards import is_legal_coords
+    board = BoardState.empty(3)
+    config = RewardConfig(legality_level="superko")
+    assert is_legal_coords(board, "B", (1, 1), config)
+    assert not is_legal_coords(board, "B", (-1, 1), config)
+    board.apply_move("B", "B2")
+    assert not is_legal_coords(board, "W", (1, 1), config)

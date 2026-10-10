@@ -12,11 +12,11 @@ from go_rl.training_utils import (
 @pytest.mark.parametrize(
     "bits,expected",
     [
-        (4, {"load_in_4bit": True}),
-        (8, {"load_in_8bit": True}),
-        (0, {}),
-        (16, {}),
-        (32, {}),
+        (4, {"load_in_4bit": True, "load_in_8bit": False}),
+        (8, {"load_in_4bit": False, "load_in_8bit": True}),
+        (0, {"load_in_4bit": False, "load_in_8bit": False}),
+        (16, {"load_in_4bit": False, "load_in_8bit": False}),
+        (32, {"load_in_4bit": False, "load_in_8bit": False}),
     ],
 )
 def test_quantization_kwargs_valid_bits(bits, expected):
@@ -145,3 +145,27 @@ def test_configure_torch_for_speed_without_matmul_precision():
 
     # Should still set other optimizations
     assert mock_torch.backends.cuda.matmul.allow_tf32 is True
+
+
+def test_fp32_disables_mixed_precision():
+    from go_rl.training_utils import precision_kwargs
+    torch = MagicMock()
+    torch.cuda.is_available.return_value = True
+    torch.cuda.is_bf16_supported.return_value = True
+    with patch.dict("sys.modules", {"torch": torch}):
+        assert precision_kwargs(32) == {"bf16": False, "fp16": False}
+        assert precision_kwargs(16) == {"bf16": True, "fp16": False}
+        torch.cuda.is_bf16_supported.return_value = False
+        assert precision_kwargs(16) == {"bf16": False, "fp16": True}
+
+
+def test_cache_key_includes_pass_history():
+    from go_rl.board import BoardState
+    from go_rl.shared_types import board_key
+    board = BoardState.empty(9)
+    passed = board.clone()
+    passed.apply_move("B", "PASS")
+    passed.apply_move("W", "PASS")
+    assert board.current_board() == passed.current_board()
+    assert board.next_player() == passed.next_player()
+    assert board_key(board) != board_key(passed)

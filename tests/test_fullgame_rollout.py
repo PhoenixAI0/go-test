@@ -265,3 +265,32 @@ def test_simulate_full_game_analysis_cache_ordered_dict_handles_eviction():
     assert result.truncated is True
     assert katago.calls == 2
     assert len(cache) == 1
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_generation_uses_cache_and_restores_training_mode(monkeypatch, fail):
+    torch = pytest.importorskip("torch")
+    from types import SimpleNamespace
+    from go_rl.fullgame_rollout import generate_model_move
+
+    class Model(torch.nn.Module):
+        device = "cpu"
+
+        def generate(self, **kwargs):
+            assert not self.training
+            assert kwargs["use_cache"] is True
+            assert not torch.is_grad_enabled()
+            if fail:
+                raise RuntimeError("generation failed")
+            return torch.tensor([[1, 2]])
+
+    model = Model()
+    tokenizer = SimpleNamespace(eos_token_id=0, decode=lambda *args, **kwargs: "PASS")
+    monkeypatch.setattr("go_rl.fullgame_rollout.build_generation_inputs",
+                        lambda **kwargs: {"input_ids": torch.tensor([[1]])})
+    if fail:
+        with pytest.raises(RuntimeError, match="generation failed"):
+            generate_model_move(model, tokenizer, BoardState.empty(9), RolloutConfig(), "plain")
+    else:
+        assert generate_model_move(model, tokenizer, BoardState.empty(9), RolloutConfig(), "plain") == "PASS"
+    assert model.training

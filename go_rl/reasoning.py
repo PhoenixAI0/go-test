@@ -36,7 +36,11 @@ def detect_reasoning_profile(
         return configured_profile
 
     model_text = str(model_name or "")
-    tokenizer_text = str(getattr(tokenizer, "name_or_path", "") or "")
+    # Saved adapters use local directory names without a model-family marker.
+    tokenizer_text = " ".join([
+        str(getattr(tokenizer, "name_or_path", "") or ""),
+        type(tokenizer).__name__,
+    ])
     model_matches = _keyword_profiles(model_text)
     tokenizer_matches = _keyword_profiles(tokenizer_text)
 
@@ -103,6 +107,10 @@ def _extract_qwen3(completion: object) -> tuple[str, bool, bool]:
 
     if has_reasoning and end_count < start_count:
         return "", True, True
+
+    # Qwen's generation prompt can already contain the opening <think> tag.
+    if not has_reasoning and end_count:
+        return _QWEN_THINK_END.split(text)[-1].strip(), True, False
 
     if not has_reasoning:
         return text.strip(), False, False
@@ -277,15 +285,5 @@ def build_chat_template_kwargs(reasoning_cfg: object, profile: str) -> dict[str,
 
 
 def build_generation_kwargs(reasoning_cfg: object, profile: str) -> dict[str, object]:
-    if not getattr(reasoning_cfg, "enabled", True):
-        return {}
-    if profile == "qwen3":
-        return {"enable_thinking": bool(getattr(reasoning_cfg, "qwen_enable_thinking", True))}
-    if profile == "gpt_oss":
-        return {"reasoning_effort": str(getattr(reasoning_cfg, "gpt_oss_reasoning_effort", "medium"))}
-    if profile == "glm47":
-        return {
-            "thinking_type": str(getattr(reasoning_cfg, "glm_thinking_type", "enabled")),
-            "clear_thinking": bool(getattr(reasoning_cfg, "glm_clear_thinking", False)),
-        }
+    # Thinking controls belong to apply_chat_template, not model.generate.
     return {}

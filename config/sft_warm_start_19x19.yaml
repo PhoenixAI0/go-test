@@ -2,7 +2,7 @@
 # This config is optimized for the larger board size with longer game sequences
 
 dataset_path: data/sft_19x19.jsonl
-model_name: qwen-3-8b
+model_name: Qwen/Qwen3-8B
 output_dir: outputs/sft_warm_start_19x19
 log_dir: logs/sft_warm_start_19x19
 
@@ -25,9 +25,9 @@ lora_alpha: 16
 lora_dropout: 0.0
 
 # Training optimizations
-use_packing: true
+use_packing: false
 use_8bit_optimizer: true
-quantization_bits: 8
+quantization_bits: 4
 
 # Random seed for reproducibility
 seed: 3407
@@ -40,7 +40,7 @@ reasoning:
   profile: auto
   optimize_final_only: true
   malformed_policy: mask_all
-  qwen_enable_thinking: true
+  qwen_enable_thinking: false
   gpt_oss_reasoning_effort: medium
   glm_thinking_type: enabled
   glm_clear_thinking: false

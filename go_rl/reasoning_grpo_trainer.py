@@ -24,6 +24,7 @@ class ReasoningGRPOTrainer(GRPOTrainer):
     ) -> None:
         self.reasoning_config = reasoning_config or ReasoningConfig()
         super().__init__(*args, **kwargs)
+        self._restore_checkpointing_options()
 
         model_name = reasoning_model_name or getattr(getattr(self.model, "config", None), "_name_or_path", "")
         self.reasoning_profile = detect_reasoning_profile(
@@ -51,11 +52,22 @@ class ReasoningGRPOTrainer(GRPOTrainer):
         if not hasattr(self, "_metrics"):
             self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
 
+    def _restore_checkpointing_options(self) -> None:
+        # TRL 0.24 enables checkpointing without forwarding kwargs, both during
+        # setup and after generation. Reentrant checkpointing can lose all LoRA
+        # gradients when the frozen embeddings don't require gradients.
+        if self.model.is_gradient_checkpointing:
+            self.model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs=self.args.gradient_checkpointing_kwargs
+                or {"use_reentrant": False}
+            )
+
     def _generate_and_score_completions(
         self,
         inputs: list[dict[str, torch.Tensor]],
     ) -> dict[str, torch.Tensor]:
         output = super()._generate_and_score_completions(inputs)
+        self._restore_checkpointing_options()
         if not self.reasoning_config.enabled or not self.reasoning_config.optimize_final_only:
             return output
 

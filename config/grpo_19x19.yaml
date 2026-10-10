@@ -6,23 +6,21 @@ training:
   max_seq_length: 4096
   batch_size: 1
   gradient_accumulation: 8
-  learning_rate: 1e-5
+  learning_rate: 1.0e-5
   num_steps: 4000
   seed: 3407
   lora_rank: 64
   lora_alpha: 16
   lora_dropout: 0.0
   use_lora: true
-  grpo_mini_batch: 1
-  grpo_logit_chunk_multiplier: 8
   use_8bit_optimizer: true
-  quantization_bits: 8
+  quantization_bits: 4
   reasoning:
     enabled: true
     profile: auto
     optimize_final_only: true
     malformed_policy: mask_all
-    qwen_enable_thinking: true
+    qwen_enable_thinking: false
     gpt_oss_reasoning_effort: medium
     glm_thinking_type: enabled
     glm_clear_thinking: false
@@ -40,12 +38,12 @@ reward:
   illegal_penalty: -1.0
   length_penalty: -0.05
   full_game_bonus: 0.5
-  strict_legality: false
+  strict_legality: true
 rollout:
   num_samples: 8
   temperature: 1.0
   top_p: 0.9
-  max_tokens: 4
+  max_tokens: 16
   stop_at_pass: true
 notes:
   promotion_gate: Train 19x19 after the 9x9 promotion gate is met.
