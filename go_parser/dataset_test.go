@@ -105,14 +105,11 @@ func TestSamplePositionsStopsOnIllegalMove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("samplePositions: %v", err)
 	}
-	if len(samples) != 2 {
-		t.Fatalf("expected 2 samples before illegal move stops, got %d", len(samples))
+	if len(samples) != 1 {
+		t.Fatalf("expected only the legal move's sample, got %d", len(samples))
 	}
-	if samples[0].Response != "A5" || samples[1].Response != "A5" {
-		t.Fatalf("unexpected responses: %s, %s", samples[0].Response, samples[1].Response)
-	}
-	if !bytes.Contains([]byte(samples[1].Prompt), []byte("X....")) {
-		t.Fatalf("expected prompt to include prior move at A5")
+	if samples[0].Response != "A5" {
+		t.Fatalf("unexpected response: %s", samples[0].Response)
 	}
 }
 

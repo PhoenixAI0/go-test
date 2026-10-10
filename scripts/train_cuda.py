@@ -28,6 +28,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--optimizer", choices=["adamw_8bit", "adamw"], default="adamw_8bit")
     parser.add_argument("--output-dir", type=Path, help="New run directory (default: outputs/cuda_TIMESTAMP)")
     parser.add_argument("--max-positions", type=int, default=200000, help="Maximum positions per board size")
+    parser.add_argument("--no-download-data", action="store_true", help="Require local SGFs; never download games")
+    parser.add_argument("--download-games", type=int, default=10000, help="Maximum downloaded games per board size (default: 10000)")
+    parser.add_argument("--data-cache", type=Path, default=Path("data/downloads"), help="Cache for verified SGF archives")
     parser.add_argument("--skip-setup", action="store_true", help="Reuse the installed environment and KataGo")
     parser.add_argument("--skip-fullgame", action="store_true", help="Stop after 19x19 position GRPO")
     parser.add_argument("--smoke", action="store_true", help="One update per stage using a tiny synthetic SGF fixture")
@@ -35,8 +38,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb", action="store_true", help="Enable W&B (disabled by default)")
     parser.add_argument("--preflight-only", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
-    if args.max_positions < 1:
-        parser.error("--max-positions must be positive")
+    if args.max_positions < 1 or args.download_games < 1:
+        parser.error("--max-positions and --download-games must be positive")
     return args
 
 
@@ -46,7 +49,13 @@ def check_inputs(args: argparse.Namespace) -> None:
     ):
         raise ValueError(f"Run directory is not empty: {args.output_dir}. Choose a new --output-dir.")
     if not args.smoke:
+        if args.sgf_9x9.resolve() == args.sgf_19x19.resolve():
+            raise ValueError("Each board size needs a separate SGF directory.")
         for path in (args.sgf_9x9, args.sgf_19x19):
+            if path.exists() and not path.is_dir():
+                raise ValueError(f"SGF path is not a directory: {path}")
+            if not args.no_download_data:
+                continue
             if not path.is_dir() or not next(path.rglob("*.sgf"), None):
                 raise ValueError(f"No SGF games in {path}. Supply both board sizes, or use --smoke to test setup.")
 
@@ -96,6 +105,7 @@ def main() -> None:
     if args.dry_run:
         print(f"Base model: {args.model}; setup: {not args.skip_setup}; smoke: {args.smoke}")
         print("Data: synthetic smoke fixtures" if args.smoke else f"Data: {args.sgf_9x9}, {args.sgf_19x19}")
+        print(f"Download missing SGFs: {not args.no_download_data and not args.smoke}")
         print(" -> ".join(stage[0] for stage in stages))
         print("Each stage loads the preceding saved adapter. Match evaluation and Hub upload are separate.")
         return
@@ -128,6 +138,12 @@ def main() -> None:
             print(f"KataGo {size}x{size} preflight: {client.analyze_position(BoardState.empty(size)).winrate:.3f}", flush=True)
     finally:
         client.close()
+
+    data_sources = {}
+    if not args.smoke and not args.no_download_data:
+        from go_rl.sgf_download import ensure_sgf_games
+        data_sources = ensure_sgf_games(
+            {9: args.sgf_9x9, 19: args.sgf_19x19}, args.data_cache, args.download_games)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     run_dir = (args.output_dir or Path(f"outputs/{'smoke' if args.smoke else 'cuda'}_{stamp}")).resolve()
@@ -171,7 +187,7 @@ def main() -> None:
         commands.append((command, Path(training["output_dir"])))
         previous_model = training["output_dir"]
     (run_dir / "run.json").write_text(json.dumps({"model": args.model, "smoke": args.smoke,
-        "stages": [label for label, *_ in stages], **gpu}, indent=2) + "\n")
+        "stages": [label for label, *_ in stages], "sgf_sources": data_sources, **gpu}, indent=2) + "\n")
     for command, checkpoint in commands:
         run(command)
         if not all((checkpoint / name).is_file() for name in

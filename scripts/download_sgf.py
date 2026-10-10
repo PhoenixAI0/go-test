@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect and validate SGF files for training Go models."""
+"""Download, inspect, and validate SGF files for training Go models."""
 
 from __future__ import annotations
 
@@ -26,10 +26,13 @@ def setup_logging(level: str = "INFO") -> None:
 def main() -> int:
     ensure_virtualenv()
     parser = argparse.ArgumentParser(
-        description="Inspect and validate SGF files for Go RL training",
+        description="Download or validate SGF files for Go RL training",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Download real KataGo games (9x9 or 19x19)
+  uv run python scripts/download_sgf.py --download --board-size 9
+
   # Validate existing SGF files
   uv run python scripts/download_sgf.py --validate-only --board-size 9
 
@@ -39,8 +42,8 @@ Examples:
   # Show manual download instructions
   uv run python scripts/download_sgf.py --manual-instructions --board-size 9
 
-Note: SGF sources are listed for manual download or export. This script
-      validates local files and points you to the available sources.
+Note: --download uses a checksum-pinned KataGo bulk archive without authentication.
+      Existing SGFs are reused. Other sources are available via --manual-instructions.
         """,
     )
 
@@ -57,6 +60,9 @@ Note: SGF sources are listed for manual download or export. This script
         type=str,
         help="Output directory (default: data/sgf_<board_size>)",
     )
+    parser.add_argument("--download", action="store_true", help="Download real KataGo SGFs for an empty directory")
+    parser.add_argument("--max-games", type=int, default=10000, help="Maximum games to import (default: 10000)")
+    parser.add_argument("--cache-dir", type=Path, default=Path("data/downloads"))
     parser.add_argument(
         "--validate-only",
         action="store_true",
@@ -98,6 +104,18 @@ Note: SGF sources are listed for manual download or export. This script
     else:
         output_dir = Path(f"data/sgf_{args.board_size}x{args.board_size}")
 
+    if args.download:
+        if args.board_size not in (9, 19) or args.max_games < 1:
+            parser.error("--download supports board sizes 9 and 19, with --max-games > 0")
+        from go_rl.sgf_download import ensure_sgf_games
+        try:
+            ensure_sgf_games({args.board_size: output_dir}, args.cache_dir, args.max_games)
+        except (ValueError, RuntimeError) as exc:
+            logger.error("%s", exc)
+            return 1
+        if not args.validate_only:
+            return 0
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Handle list sources
@@ -126,7 +144,7 @@ Note: SGF sources are listed for manual download or export. This script
             verbose=args.verbose,
         )
 
-        print(f"\nValidation Results:")
+        print("\nValidation Results:")
         print(f"  Valid:   {valid}")
         print(f"  Invalid: {invalid}")
         print(f"  Total:   {valid + invalid}")

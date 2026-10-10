@@ -29,14 +29,20 @@ newer. CUDA runtime libraries come with the Python packages; a separately instal
 CUDA toolkit is not needed. Setup checks actual attention backward and optimizer
 kernels, and the launcher additionally tests the selected quantization kernels.
 
-Put real SGF games in both `data/sgf_9x9/` and `data/sgf_19x19/`, then run:
+On either platform, run from the repository root:
 
 ```bash
 ./scripts/train_cuda.sh
 ```
 
 This installs the locked Python 3.12 environment, installs Go if needed, builds
-SGF datasets, checks CUDA and KataGo analysis, and trains these stages in order:
+SGF datasets, checks CUDA and KataGo analysis, and trains these stages in order.
+If either SGF directory is empty, it automatically downloads real games from the
+[KataGo bulk archive](https://katagoarchive.org/kata1/traininggames/index.html),
+verifies the archive checksum, validates the SGFs, and separates 9x9 and 19x19 games.
+Existing games in `data/sgf_9x9/` and `data/sgf_19x19/` are reused.
+
+The training stages are:
 
 1. 9x9 supervised warm start.
 2. 9x9 position GRPO, loading the SFT adapter.
@@ -65,6 +71,8 @@ Useful options:
 ./scripts/train_cuda.sh --skip-setup           # Reuse the installed environment
 ./scripts/train_cuda.sh --sgf-9x9 /games/9 --sgf-19x19 /games/19
 ./scripts/train_cuda.sh --skip-fullgame        # Stop after position GRPO
+./scripts/train_cuda.sh --no-download-data     # Require existing local SGFs
+./scripts/train_cuda.sh --download-games 1000  # Cap imported games per board size
 CUDA_VISIBLE_DEVICES=1 ./scripts/train_cuda.sh --skip-setup
 ./scripts/train_cuda.sh --quantization-bits 16 --optimizer adamw  # BF16/FP16 LoRA
 ```
@@ -102,6 +110,22 @@ flags are rejected explicitly. `--quantization-bits 16 --optimizer adamw` uses
 BF16 where supported and FP16 otherwise; it needs more memory than 4-bit LoRA.
 The whole-curriculum launcher uses one GPU. Individual stage scripts support DDP;
 it does not orchestrate a cluster of linked Sparks.
+
+The default data source is the pinned `2025-01-01sgfs.tar.bz2` public self-play
+archive (about 21 MiB compressed). Up to 10,000 games per size are imported;
+the default import contains 461 9x9 games and 10,000 19x19 games. This is a
+starter corpus, so the resulting 9x9 dataset may be smaller than `--max-positions`.
+The games include varied rules and komi. The current prompts represent board
+positions and side to move; GRPO evaluation uses the configured Chinese rules
+and 7.5 komi. Use your own curated SGFs for a larger or rule-specific SFT corpus.
+The Go parser stops a game before an illegal move under its training legality checks.
+
+Downloads are cached in `data/downloads/` (override with `--data-cache`). Each
+installed corpus includes `source.json` with its source, SHA-256, and file list;
+the run's `run.json` records data provenance. Completed imports are reused and
+interrupted downloads/imports never appear as complete datasets. Downloads fail
+explicitly on network or checksum errors. Smoke mode continues to use synthetic
+fixtures and never downloads the game archive.
 
 W&B is off unless `--wandb` is supplied. Match evaluation, promotion gates, and
 Hub publishing are separate from this training-only launcher. The existing
@@ -148,6 +172,13 @@ uv sync --extra dev
 Expected SGF directories:
 - `data/sgf_9x9/`
 - `data/sgf_19x19/`
+
+Download real games separately (no GPU needed after installing the Python environment):
+
+```bash
+uv run python scripts/download_sgf.py --download --board-size 9
+uv run python scripts/download_sgf.py --download --board-size 19
+```
 
 Dataset helpers:
 ```bash

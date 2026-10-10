@@ -54,10 +54,10 @@ func TestBoardSamplePositionsIllegalMoveStops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("samplePositions: %v", err)
 	}
-	if len(samples) != 2 {
-		t.Fatalf("expected 2 samples, got %d", len(samples))
+	if len(samples) != 1 {
+		t.Fatalf("expected 1 legal sample, got %d", len(samples))
 	}
-	if samples[1].Response != "A1" {
-		t.Fatalf("expected response A1, got %s", samples[1].Response)
+	if samples[0].Response != "A1" {
+		t.Fatalf("expected response A1, got %s", samples[0].Response)
 	}
 }

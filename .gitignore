@@ -32,8 +32,10 @@ env/
 *.safetensors
 
 # Data files (too large for git)
-data/sgf_9x9/*.sgf
-data/sgf_19x19/*.sgf
+data/sgf_9x9/
+data/sgf_19x19/
+data/downloads/
+data/.sgf-import-*/
 data/*.jsonl
 data/*.csv
 data/*.parquet

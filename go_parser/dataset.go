@@ -193,20 +193,21 @@ func samplePositions(game *SgfGame, maxPositions int) ([]Sample, error) {
 		if err != nil {
 			return nil, err
 		}
-			prompt, err := board.Prompt(move.Player)
+		prompt, err := board.Prompt(move.Player)
 		if err != nil {
 			return nil, err
 		}
-		samples = append(samples, Sample{
-			Prompt:    prompt,
-			Response: gtp,
-			BoardSize: game.BoardSize,
-		})
-
-		if err := board.ApplyMove(move.Player, gtp, false); err != nil {
-			log.Printf("Stopping game after illegal move %s: %v", gtp, err)
+		// Validate/apply before adding the label. Imported games can contain
+		// suicide or ko moves under rules that differ from our training rules.
+		if err := board.ApplyMove(move.Player, gtp, true); err != nil {
+			log.Printf("Stopping game before illegal training move %s: %v", gtp, err)
 			break
 		}
+		samples = append(samples, Sample{
+			Prompt:    prompt,
+			Response:  gtp,
+			BoardSize: game.BoardSize,
+		})
 		if len(samples) >= maxPositions {
 			break
 		}

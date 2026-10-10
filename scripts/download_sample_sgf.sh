@@ -69,7 +69,7 @@ NUMERIC_SIZE=$(echo "$BOARD_SIZE" | cut -d'x' -f1)
 uv run python scripts/download_sgf.py \
     --board-size "$NUMERIC_SIZE" \
     --output-dir "$TARGET_DIR" \
-    --manual-instructions
+    --download
 
 echo ""
 

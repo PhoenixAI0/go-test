@@ -23,6 +23,13 @@ class SGFSource:
 
 # Public SGF sources
 SOURCES = {
+    "katago": SGFSource(
+        name="KataGo Bulk Archive",
+        description="Real self-play SGFs; automatic download via scripts/download_sgf.py --download",
+        board_sizes=[9, 19],
+        requires_auth=False,
+        url="https://katagoarchive.org/kata1/traininggames/index.html",
+    ),
     "kgs": SGFSource(
         name="KGS Archives",
         description="KGS archives for manual download",
@@ -126,7 +133,7 @@ def validate_sgf_directory(
     Returns:
         Tuple of (valid_count, invalid_count)
     """
-    sgf_files = list(directory.glob("*.sgf"))
+    sgf_files = list(directory.rglob("*.sgf"))
     valid_count = 0
     invalid_count = 0
 
