@@ -51,6 +51,7 @@ def test_launcher_handoffs_and_stops_on_failure(tmp_path, monkeypatch, fail_stag
     monkeypatch.setenv("KATAGO_BIN", str(binary))
     monkeypatch.setenv("KATAGO_MODEL", str(binary))
     monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.delenv("MODEL_GTP_COMMAND_TEMPLATE", raising=False)
     monkeypatch.setattr(launcher, "cuda_info", lambda *args: {
         "torch": "test", "cuda": "test", "gpu": "test CUDA device"})
     monkeypatch.setattr(go_rl.katago, "KataGoAnalysisClient", lambda cfg: SimpleNamespace(
@@ -86,6 +87,7 @@ def test_launcher_handoffs_and_stops_on_failure(tmp_path, monkeypatch, fail_stag
             size = int(tag.split("x")[0])
             row = {"prompt": BoardState.empty(size).to_prompt(), "response": "D4"}
             (data_dir / f"sft_{tag}.jsonl").write_text(json.dumps(row) + "\n")
+            (data_dir / f"rl_prompts_{tag}.jsonl").write_text(json.dumps(row) + "\n")
             return
         config = yaml.safe_load(Path(command[command.index("--config") + 1]).read_text())
         training = config.get("training", config)

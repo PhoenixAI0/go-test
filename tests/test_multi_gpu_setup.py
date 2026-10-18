@@ -7,7 +7,7 @@ and that rank-sensitive operations (like reward computation) are handled properl
 from __future__ import annotations
 
 import os
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 class TestMultiGPUConfiguration:
@@ -226,10 +226,12 @@ def test_gpu_count_detection():
 
     # Test with environment variable
     env = {"WORLD_SIZE": "4"}
-    with patch.dict(os.environ, env, clear=True):
+    mock_torch = Mock()
+    mock_torch.cuda.is_available.return_value = False
+    # Avoid initializing the real CUDA runtime while clearing the device mask.
+    with patch.dict(os.environ, env, clear=True), patch.dict("sys.modules", {"torch": mock_torch}):
         count = detect_gpu_count()
-        # Should be at least 1 (from env var)
-        assert count >= 1
+        assert count == 4
 
 
 def test_rank_zero_decorator():

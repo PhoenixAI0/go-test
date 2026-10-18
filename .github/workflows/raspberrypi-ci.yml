@@ -37,7 +37,9 @@ jobs:
           .venv-ci/bin/python -m pytest \
             tests/test_board.py \
             tests/test_config.py \
+            tests/test_eval_elo.py \
             tests/test_grpo_rewards.py \
+            tests/test_gtp_match.py \
             tests/test_logging_utils.py \
             tests/test_prompting.py \
             tests/test_reasoning.py \
@@ -45,5 +47,4 @@ jobs:
             tests/test_rewards.py \
             tests/test_rollout.py \
             tests/test_run_logging.py \
-            tests/test_sgf_utils.py \
             tests/test_training_utils.py

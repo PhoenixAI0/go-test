@@ -36,7 +36,6 @@ reward:
   winrate_scale: 0.0
   legal_bonus: 0.2
   illegal_penalty: -1.0
-  length_penalty: -0.05
   full_game_bonus: 0.0
   scorelead_scale: 0.02
   terminal_outcome_bonus: 1.0
@@ -47,7 +46,6 @@ rollout:
   temperature: 0.8
   top_p: 0.9
   max_tokens: 16
-  stop_at_pass: true
 full_game:
   enabled: true
   max_plies: 300
@@ -55,5 +53,4 @@ full_game:
   opponent_policy: katago_best
   model_color_mode: alternate
   seed_empty_board_prob: 0.4
-  max_seed_prefix_moves: 40
   max_model_turns: 150

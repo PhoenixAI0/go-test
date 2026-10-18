@@ -36,7 +36,6 @@ class KataGoAnalysisClient:
         self.config = config
         self._process: Optional[subprocess.Popen[str]] = None
         self._write_lock = threading.RLock()
-        self._lock = self._write_lock
         self._pending_lock = threading.RLock()
         self._pending: dict[int, _PendingRequest] = {}
         self._shutdown_event = threading.Event()

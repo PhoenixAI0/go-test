@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
-import subprocess
 import sys
 from pathlib import Path
 
-from venv_utils import ensure_virtualenv, uv_pip_install
+from venv_utils import ensure_virtualenv
+
+# Trainer checkpoints hold optimizer state; only the final save belongs on the Hub.
+UPLOAD_IGNORE_PATTERNS = ["checkpoint-*", "runs/"]
+DEFAULT_BASE_MODEL = "Qwen/Qwen3-8B"
 
 
 def setup_logging(level: str = "INFO") -> None:
@@ -41,9 +45,8 @@ Examples:
       --private
 
 Prerequisites:
-  1. Sync upload dependencies: uv sync --extra upload
-  2. Login: huggingface-cli login
-  3. Verify: huggingface-cli whoami
+  1. Login: huggingface-cli login
+  2. Verify: huggingface-cli whoami
         """,
     )
 
@@ -68,8 +71,7 @@ Prerequisites:
     )
     parser.add_argument(
         "--base-model",
-        default="qwen-3-8b",
-        help="Base model name (default: qwen-3-8b)",
+        help=f"Base model ID (default: from adapter_config.json, else {DEFAULT_BASE_MODEL})",
     )
     parser.add_argument(
         "--private",
@@ -105,20 +107,14 @@ Prerequisites:
     is_lora = (model_path / "adapter_config.json").exists()
     logger.info(f"Model type: {'LoRA adapter' if is_lora else 'Full model'}")
 
-    # Import required libraries
-    try:
-        from huggingface_hub import HfApi, create_repo
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-    except ImportError as e:
-        logger.warning(f"Missing required library: {e}")
-        logger.info("Installing missing packages with uv (project sync is preferred: uv sync --extra upload)...")
-        try:
-            uv_pip_install(["huggingface_hub", "transformers"])
-        except subprocess.CalledProcessError as install_error:
-            logger.error(f"Dependency install failed: {install_error}")
-            return 1
-        from huggingface_hub import HfApi, create_repo
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+    base_model = args.base_model
+    if base_model is None and is_lora:
+        adapter_config = json.loads((model_path / "adapter_config.json").read_text(encoding="utf-8"))
+        base_model = adapter_config.get("base_model_name_or_path")
+    base_model = base_model or DEFAULT_BASE_MODEL
+
+    from huggingface_hub import HfApi, create_repo
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     # Create repository
     logger.info(f"Creating repository: {args.repo_id}")
@@ -128,7 +124,7 @@ Prerequisites:
             private=args.private,
             exist_ok=True,
         )
-        logger.info(f"Repository created (or already exists)")
+        logger.info("Repository created (or already exists)")
     except Exception as e:
         logger.error(f"Failed to create repository: {e}")
         return 1
@@ -149,21 +145,18 @@ Prerequisites:
                 folder_path=str(model_path),
                 repo_id=args.repo_id,
                 repo_type="model",
+                ignore_patterns=UPLOAD_IGNORE_PATTERNS,
             )
 
             model_card = generate_model_card(
                 args.repo_id,
-                args.base_model,
+                base_model,
                 args.board_size,
                 is_lora=True,
                 custom_card_path=args.model_card,
             )
-
-            readme_path = model_path / "README.md"
-            readme_path.write_text(model_card, encoding="utf-8")
-
             api.upload_file(
-                path_or_fileobj=str(readme_path),
+                path_or_fileobj=model_card.encode("utf-8"),
                 path_in_repo="README.md",
                 repo_id=args.repo_id,
                 repo_type="model",
@@ -187,7 +180,7 @@ Prerequisites:
         # Generate model card
         model_card = generate_model_card(
             args.repo_id,
-            args.base_model,
+            base_model,
             args.board_size,
             is_lora=False,
             custom_card_path=args.model_card,
@@ -200,19 +193,17 @@ Prerequisites:
 
         # Upload model card
         api = HfApi()
-        readme_path = Path("/tmp/README.md")
-        readme_path.write_text(model_card, encoding="utf-8")
         api.upload_file(
-            path_or_fileobj=str(readme_path),
+            path_or_fileobj=model_card.encode("utf-8"),
             path_in_repo="README.md",
             repo_id=args.repo_id,
             repo_type="model",
         )
 
-        logger.info(f"\n✓ Model uploaded successfully!")
+        logger.info("\n✓ Model uploaded successfully!")
         logger.info(f"  URL: https://huggingface.co/{args.repo_id}")
-        logger.info(f"\nTo use this model:")
-        logger.info(f'  from transformers import AutoModelForCausalLM')
+        logger.info("\nTo use this model:")
+        logger.info('  from transformers import AutoModelForCausalLM')
         logger.info(f'  model = AutoModelForCausalLM.from_pretrained("{args.repo_id}")')
 
         return 0

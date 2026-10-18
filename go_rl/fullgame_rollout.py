@@ -8,22 +8,15 @@ from typing import Optional
 from .board import BoardState
 from .config import FullGameConfig, ReasoningConfig, RewardConfig, RolloutConfig
 from .katago import KataGoResult
-from .prompting import build_generation_inputs, build_prompt, parse_move
+from .prompting import build_generation_inputs, build_prompt
 from .reasoning import (
     build_chat_template_kwargs,
-    build_generation_kwargs,
     detect_reasoning_profile,
     strip_reasoning_for_reward,
 )
-from .rewards import (
-    is_legal_move,
-    legality_reward,
-    length_reward,
-    resolve_legality_level,
-)
-from .rollout import normalize_move
+from .rewards import is_legal_move, legality_reward
+from .rollout import parse_move_answer
 from .shared_types import BoardKey, KataGoService, board_key
-from .rules import LegalityLevel
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +26,6 @@ class FullGameEpisodeResult:
     scorelead_reward: float
     terminal_reward: float
     legality_reward_total: float
-    length_reward_total: float
     model_turns: int
     plies_played: int
     truncated: bool
@@ -78,26 +70,9 @@ def align_board_to_player_turn(board: BoardState, player: str) -> BoardState:
     aligned.apply_move(to_move, "PASS", strict=True)
     return aligned
 
-def _parse_completion_to_move(completion: str, stop_at_pass: bool) -> str:
-    stripped = completion.strip()
-    if not stripped:
-        return ""
-    try:
-        return parse_move(stripped)
-    except ValueError:
-        try:
-            return normalize_move(stripped, stop_at_pass=stop_at_pass)
-        except ValueError:
-            return "PASS"
-
-
-def _extract_reward_move(
-    completion: str,
-    stop_at_pass: bool,
-    profile: str,
-) -> str:
-    final_text = strip_reasoning_for_reward(completion, profile=profile)
-    return _parse_completion_to_move(final_text, stop_at_pass=stop_at_pass)
+def _extract_reward_move(completion: str, profile: str) -> str:
+    """Return the answered move, or "" (illegal) when the answer is malformed."""
+    return parse_move_answer(strip_reasoning_for_reward(completion, profile=profile))
 
 
 def generate_model_move(
@@ -107,9 +82,11 @@ def generate_model_move(
     rollout_cfg: RolloutConfig,
     reasoning_profile: str,
     chat_template_kwargs: dict[str, object] | None = None,
-    generation_kwargs: dict[str, object] | None = None,
 ) -> str:
-    """Generate one model move from the current board prompt."""
+    """Generate one model move from the current board prompt.
+
+    Thinking controls belong in chat_template_kwargs; model.generate rejects them.
+    """
     try:
         import torch
     except ImportError:  # pragma: no cover - torch is required at runtime
@@ -133,8 +110,6 @@ def generate_model_move(
         "pad_token_id": getattr(tokenizer, "eos_token_id", None),
         "use_cache": True,
     }
-    if generation_kwargs:
-        gen_kwargs.update(generation_kwargs)
 
     was_training = model.training
     model.eval()
@@ -147,28 +122,22 @@ def generate_model_move(
     prompt_len = int(inputs["input_ids"].shape[-1])
     completion_tokens = output_ids[0][prompt_len:]
     completion_text = tokenizer.decode(completion_tokens, skip_special_tokens=True)
-    return _extract_reward_move(
-        completion=completion_text,
-        stop_at_pass=rollout_cfg.stop_at_pass,
-        profile=reasoning_profile,
-    )
+    return _extract_reward_move(completion_text, reasoning_profile)
 
 
-def _apply_move_or_penalize(
-    board: BoardState,
-    player: str,
-    move: str,
-    reward_cfg: RewardConfig,
-) -> tuple[bool, float, float, bool]:
-    """Apply move if legal and return (applied, legality, length, ended_by_illegal)."""
-    legal = is_legal_move(board, player, move, reward_cfg)
-    legality = legality_reward(legal, reward_cfg)
-    length = length_reward(move, reward_cfg)
-    if not legal:
-        return False, legality, length, reward_cfg.illegal_move_ends_game
-    strict_apply = resolve_legality_level(reward_cfg) != LegalityLevel.BASIC
-    board.apply_move(player, move, strict=strict_apply)
-    return True, legality, length, False
+def _apply_if_legal(board: BoardState, player: str, move: str, reward_cfg: RewardConfig) -> bool:
+    """Apply a legal move and report whether it was played.
+
+    The game continues against KataGo under real rules, so suicide and ko are illegal
+    even at the basic legality level; applying them would corrupt the board.
+    """
+    if not is_legal_move(board, player, move, reward_cfg):
+        return False
+    try:
+        board.apply_move(player, move, strict=True)
+    except ValueError:
+        return False
+    return True
 
 
 def simulate_full_game(
@@ -194,20 +163,16 @@ def simulate_full_game(
         )
     opponent_color = "W" if model_color == "B" else "B"
     if reasoning_cfg is None:
-        from .config import ReasoningConfig
-
         reasoning_cfg = ReasoningConfig(enabled=False)
     reasoning_profile = detect_reasoning_profile(
         model_name=reasoning_model_name,
         tokenizer=tokenizer,
         configured_profile=getattr(reasoning_cfg, "profile", "plain"),
     )
-    generation_kwargs = build_generation_kwargs(reasoning_cfg, reasoning_profile)
     chat_template_kwargs = build_chat_template_kwargs(reasoning_cfg, reasoning_profile)
 
     scorelead_delta_sum = 0.0
     legality_total = 0.0
-    length_total = 0.0
     model_turns = 0
     plies_played = 0
     consecutive_passes = 0
@@ -241,42 +206,29 @@ def simulate_full_game(
     def _terminal_due_to_passes() -> bool:
         return fullgame_cfg.termination_two_passes and consecutive_passes >= 2
 
-    def _play_model_turn(move_text: str) -> bool:
+    def _play_model_turn(move_text: str) -> None:
         nonlocal scorelead_delta_sum
         nonlocal legality_total
-        nonlocal length_total
         nonlocal model_turns
         nonlocal plies_played
         nonlocal terminated_by_illegal
 
-        pre = _analyze_position(board)
-        pre_lead = scorelead_from_model_perspective(pre.score_lead, model_color)
-        applied, legality, length, ended_illegal = _apply_move_or_penalize(
-            board,
-            model_color,
-            move_text,
-            reward_cfg,
-        )
-        legality_total += legality
-        length_total += length
+        before = board.clone()
+        applied = _apply_if_legal(board, model_color, move_text, reward_cfg)
+        legality_total += legality_reward(applied, reward_cfg)
         model_turns += 1
-        if ended_illegal:
-            terminated_by_illegal = True
-            return False
+        if not applied:
+            # Otherwise the model retries from the same position on its next turn.
+            terminated_by_illegal = reward_cfg.illegal_move_ends_game
+            return
 
-        if applied:
-            post = _analyze_position(board)
-            post_lead = scorelead_from_model_perspective(post.score_lead, model_color)
-            scorelead_delta_sum += post_lead - pre_lead
+        pre_lead = scorelead_from_model_perspective(_analyze_position(before).score_lead, model_color)
+        post_lead = scorelead_from_model_perspective(_analyze_position(board).score_lead, model_color)
+        scorelead_delta_sum += post_lead - pre_lead
         _record_pass(move_text)
         plies_played += 1
-        return True
 
-    first_move = _extract_reward_move(
-        completion=initial_completion,
-        stop_at_pass=rollout_cfg.stop_at_pass,
-        profile=reasoning_profile,
-    )
+    first_move = _extract_reward_move(initial_completion, reasoning_profile)
     _play_model_turn(first_move)
 
     while not terminated_by_illegal:
@@ -315,7 +267,6 @@ def simulate_full_game(
                 rollout_cfg=rollout_cfg,
                 reasoning_profile=reasoning_profile,
                 chat_template_kwargs=chat_template_kwargs,
-                generation_kwargs=generation_kwargs,
             )
             _play_model_turn(generated_move)
 
@@ -333,13 +284,12 @@ def simulate_full_game(
 
     scorelead_reward = reward_cfg.scorelead_scale * scorelead_delta_sum
     terminal_reward = reward_cfg.terminal_outcome_bonus * final_outcome
-    total_reward = scorelead_reward + terminal_reward + legality_total + length_total
+    total_reward = scorelead_reward + terminal_reward + legality_total
     return FullGameEpisodeResult(
         total_reward=total_reward,
         scorelead_reward=scorelead_reward,
         terminal_reward=terminal_reward,
         legality_reward_total=legality_total,
-        length_reward_total=length_total,
         model_turns=model_turns,
         plies_played=plies_played,
         truncated=truncated,

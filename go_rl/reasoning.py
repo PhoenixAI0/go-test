@@ -282,8 +282,3 @@ def build_chat_template_kwargs(reasoning_cfg: object, profile: str) -> dict[str,
             "clear_thinking": bool(getattr(reasoning_cfg, "glm_clear_thinking", False)),
         }
     return {}
-
-
-def build_generation_kwargs(reasoning_cfg: object, profile: str) -> dict[str, object]:
-    # Thinking controls belong to apply_chat_template, not model.generate.
-    return {}

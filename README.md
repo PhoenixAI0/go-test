@@ -32,7 +32,7 @@ kernels, and the launcher additionally tests the selected quantization kernels.
 On either platform, run from the repository root:
 
 ```bash
-./scripts/train_cuda.sh
+./scripts/run_full_pipeline.sh
 ```
 
 This installs the locked Python 3.12 environment, installs Go if needed, builds
@@ -57,7 +57,7 @@ length; use `--model MODEL_ID` to select a smaller compatible model if needed.
 To check installation and one training update per stage without supplying games:
 
 ```bash
-./scripts/train_cuda.sh --smoke --model Qwen/Qwen3-0.6B
+./scripts/run_full_pipeline.sh --smoke --model Qwen/Qwen3-0.6B
 ```
 
 Smoke mode generates tiny synthetic SGFs in its own run directory. These fixtures
@@ -67,14 +67,14 @@ load the selected model and require a CUDA GPU.
 Useful options:
 
 ```bash
-./scripts/train_cuda.sh --dry-run              # No installation or GPU needed
-./scripts/train_cuda.sh --skip-setup           # Reuse the installed environment
-./scripts/train_cuda.sh --sgf-9x9 /games/9 --sgf-19x19 /games/19
-./scripts/train_cuda.sh --skip-fullgame        # Stop after position GRPO
-./scripts/train_cuda.sh --no-download-data     # Require existing local SGFs
-./scripts/train_cuda.sh --download-games 1000  # Cap imported games per board size
-CUDA_VISIBLE_DEVICES=1 ./scripts/train_cuda.sh --skip-setup
-./scripts/train_cuda.sh --quantization-bits 16 --optimizer adamw  # BF16/FP16 LoRA
+./scripts/run_full_pipeline.sh --dry-run              # No installation or GPU needed
+./scripts/run_full_pipeline.sh --skip-setup           # Reuse the installed environment
+./scripts/run_full_pipeline.sh --sgf-9x9 /games/9 --sgf-19x19 /games/19
+./scripts/run_full_pipeline.sh --skip-fullgame        # Stop after position GRPO
+./scripts/run_full_pipeline.sh --no-download-data     # Require existing local SGFs
+./scripts/run_full_pipeline.sh --download-games 1000  # Cap imported games per board size
+CUDA_VISIBLE_DEVICES=1 ./scripts/run_full_pipeline.sh --skip-setup
+./scripts/run_full_pipeline.sh --quantization-bits 16 --optimizer adamw  # BF16/FP16 LoRA
 ```
 
 Each run writes its datasets, resolved configs, logs, and adapters under a new
@@ -104,9 +104,10 @@ checkpoints. Architecture-specific KataGo installs are stored separately.
 
 Training uses Transformers, PEFT and TRL on both platforms, with SDPA attention and
 bitsandbytes NF4 by default. It no longer depends on Unsloth, custom FlashAttention
-builds, or vLLM. Remove the obsolete `grpo_mini_batch` and
-`grpo_logit_chunk_multiplier` keys from custom configs. Legacy FP8/dynamic-4bit
-flags are rejected explicitly. `--quantization-bits 16 --optimizer adamw` uses
+builds, or vLLM. Remove the obsolete `grpo_mini_batch`,
+`grpo_logit_chunk_multiplier`, `rollout.stop_at_pass`, `reward.length_penalty` and
+`full_game.max_seed_prefix_moves` keys from custom configs. Legacy FP8/dynamic-4bit
+flags are no longer accepted. `--quantization-bits 16 --optimizer adamw` uses
 BF16 where supported and FP16 otherwise; it needs more memory than 4-bit LoRA.
 The whole-curriculum launcher uses one GPU. Individual stage scripts support DDP;
 it does not orchestrate a cluster of linked Sparks.
@@ -127,23 +128,40 @@ interrupted downloads/imports never appear as complete datasets. Downloads fail
 explicitly on network or checksum errors. Smoke mode continues to use synthetic
 fixtures and never downloads the game archive.
 
-W&B is off unless `--wandb` is supplied. Match evaluation, promotion gates, and
-Hub publishing are separate from this training-only launcher. The existing
-`run_full_pipeline.sh` supports those workflows with a user-supplied GTP model
-engine via `--model-command-template`; it can also run with `--no-eval`.
+`train_cuda.sh` is a compatibility alias for `run_full_pipeline.sh`; both accept
+all the same options. W&B is off unless `--wandb` is supplied; use
+`--wandb-project NAME` to select the project.
+
+Match evaluation and promotion gates run when `--model-command-template` (or
+`MODEL_GTP_COMMAND_TEMPLATE` in the environment or `.env`) is supplied. The template
+must contain `{MODEL_DIR}` and may use `{BOARD_SIZE}` (for example, `9x9`). Quote
+`{MODEL_DIR}` within the command if your output path contains spaces. Supply your
+own GTP engine command; the repository does not bundle a model GTP engine.
+`--no-eval` disables evaluations and gates even when a template is configured.
+A failed 9x9 gate stops the run; a failed 19x19 gate skips full-game training and
+keeps the 19x19 position adapter as the final model. Smoke evaluations use at most
+eight games. Evaluation logs and SGFs default to the run directory.
+
+Use `--upload-to-hub --hf-repo-id user/repo` to publish the final adapter after
+training and any enabled evaluations. Add `--hf-private` for a private repository.
+`--skip-data --data-dir PATH` reuses prepared `sft_9x9.jsonl`,
+`rl_prompts_9x9.jsonl`, and `rl_prompts_19x19.jsonl` without downloading SGFs.
+`--skip-sft --model PATH` starts GRPO from an existing adapter or model and does
+not require the SFT dataset. These options still create a fresh output directory.
 
 ## Validation
 
 ```bash
-uv sync --locked --extra dev
-uv run pytest -m "not katago"
+uv run --locked pytest -m "not katago"
 ```
+
+`uv` installs the `dev` dependency group (pytest, ruff) by default.
 
 The suite includes actual one-step TRL/PEFT training and adapter saves using a tiny
 local CPU model, using the production loader and checking adapter weights after
 reload. Only KataGo is substituted in these trainer tests. Both Linux dependency
 plans have been resolved, but CUDA execution needs verification on the target
-hardware: run `./scripts/train_cuda.sh --smoke --model Qwen/Qwen3-0.6B` on each
+hardware: run `./scripts/run_full_pipeline.sh --smoke --model Qwen/Qwen3-0.6B` on each
 machine before a full run. KataGo integration tests
 require the paths from `.env` (`set -a; source .env; set +a`).
 
@@ -162,7 +180,7 @@ Requirements:
 Manual install with `uv`:
 ```bash
 uv venv .venv --python 3.12
-uv sync --extra dev
+uv sync --locked
 ```
 
 (`uv run ...` uses the project `.venv` automatically, so manual activation is optional.)
@@ -190,11 +208,6 @@ Individual builders:
 ```bash
 uv run python scripts/build_sft_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl
 uv run python scripts/build_rl_prompts.py --sgf-dir data/sgf_9x9 --output data/rl_prompts_9x9.jsonl
-```
-
-Fast builder:
-```bash
-uv run python scripts/fast_build_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl
 ```
 
 Manual Go parser compile:
@@ -241,6 +254,12 @@ uv run python scripts/run_grpo_fullgame.py --config config/grpo_fullgame_19x19.y
 3. GRPO 19x19 curriculum stage.
 4. Full-game GRPO 19x19 vs KataGo (interactive rollouts, margin + terminal outcome reward).
 
+Both GRPO stages score only the final answer (after any reasoning block), and it
+must be exactly one move in the SFT format, such as `D4` or `PASS`. Lowercase,
+punctuation, a preamble or extra text is a format error that earns the illegal-move
+penalty: the policy learns the format from the reward rather than from a lenient
+parser.
+
 The full-game stage is gated by `promotion_gate_fullgame` in `config/grpo_19x19.yaml`.
 Default gate: winrate >= 0.55 over 200 evaluation games.
 
@@ -252,7 +271,7 @@ uv run python scripts/validate_multi_gpu.py --verbose
 
 ## Evaluation
 
-Create a KataGo match config and run evaluation:
+Create a match config and run evaluation:
 ```bash
 uv run python scripts/create_match_config.py \
   --output config/match_9x9.cfg \
@@ -260,13 +279,21 @@ uv run python scripts/create_match_config.py \
   --num-games 200 \
   --model-command "/path/to/your_gtp_engine --model outputs/grpo_9x9"
 
-uv run python scripts/eval_elo.py --katago-bin $KATAGO_BIN --match-config config/match_9x9.cfg
+uv run python scripts/eval_elo.py --match-config config/match_9x9.cfg
 ```
+
+`eval_elo.py` referees GTP games between your engine and `katago gtp` (KataGo's own
+`match` command only plays KataGo networks). Colors alternate, moves are checked
+with suicide and simple-ko rules, and an illegal move or an exhausted byo-yomi
+clock loses. KataGo scores games that end with two passes or reach the move cap
+(three moves per board point). One SGF per game is written to the SGF directory,
+and engine stderr goes to the match log. The baseline uses
+`config/katago_gtp_eval.cfg` (100 visits); set `KATAGO_GTP_CONFIG` or pass
+`--katago-config` to use another KataGo GTP config.
 
 `eval_elo.py` can also write structured metrics and log to W&B:
 ```bash
 uv run python scripts/eval_elo.py \
-  --katago-bin $KATAGO_BIN \
   --match-config config/match_9x9.cfg \
   --summary-json logs/matches/match_9x9_summary.json \
   --wandb --wandb-project go-rl

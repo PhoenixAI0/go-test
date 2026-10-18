@@ -33,6 +33,7 @@ from go_rl.prompting import parse_prompt
 from go_rl.run_logging import write_run_log
 from go_rl.shared_types import BoardKey, KataGoService
 from go_rl.training_utils import (
+    add_common_training_args,
     configure_torch_for_speed,
     default_num_workers,
     get_distributed_context,
@@ -52,17 +53,8 @@ from venv_utils import ensure_virtualenv
 logger = logging.getLogger(__name__)
 
 
-def _truncate_seed_board(board: BoardState, max_seed_prefix_moves: int) -> BoardState:
-    if max_seed_prefix_moves < 1:
-        return BoardState.empty(board.size)
-    if len(board.moves) <= max_seed_prefix_moves:
-        return board
-    return BoardState(size=board.size, moves=list(board.moves[:max_seed_prefix_moves]))
-
-
 def _build_seed_board(prompt: str, full_cfg: FullGameConfig, rng: random.Random) -> BoardState:
     board = parse_prompt(prompt)
-    board = _truncate_seed_board(board, full_cfg.max_seed_prefix_moves)
     if rng.random() < full_cfg.seed_empty_board_prob:
         return BoardState.empty(board.size)
     return board
@@ -75,7 +67,6 @@ def build_fullgame_reward_fn(
     reward_cfg: RewardConfig,
     rollout_cfg: RolloutConfig,
     full_cfg: FullGameConfig,
-    seed: int,
     reasoning_cfg: ReasoningConfig | None = None,
     model_name: str = "",
 ) -> Callable[..., list[float]]:
@@ -88,10 +79,9 @@ def build_fullgame_reward_fn(
     analysis_cache: OrderedDict[BoardKey, KataGoResult] = OrderedDict()
     analysis_cache_max_size = 4096
 
-    def reward_fn(prompts: list[str], completions: list[str], **_: object) -> list[float]:
-        if katago is None:
-            raise RuntimeError("KataGo must be initialized on every training rank.")
-        prompts = _.get("board_prompt", prompts)
+    def reward_fn(prompts: list[str], completions: list[str], **kwargs: object) -> list[float]:
+        # Score the raw board, not the chat-templated prompt the model saw.
+        prompts = kwargs.get("board_prompt", prompts)
         if len(prompts) != len(completions):
             raise ValueError("Prompts and completions must have matching lengths.")
         rewards: list[float] = []
@@ -107,10 +97,8 @@ def build_fullgame_reward_fn(
             # Resampling here changes the task after the policy has acted.
             model_color = board.next_player()
             state["episode_index"] += 1
-            episode_board = board
-
             result = simulate_full_game(
-                board=episode_board,
+                board=board,
                 initial_completion=completion,
                 model=model,
                 tokenizer=tokenizer,
@@ -148,51 +136,7 @@ def build_fullgame_reward_fn(
 def main() -> None:
     ensure_virtualenv()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--smoke", action="store_true")
-    parser.add_argument(
-        "--log-level",
-        default="INFO",
-        help="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).",
-    )
-    parser.add_argument(
-        "--wandb",
-        action="store_true",
-        help="Enable Weights & Biases reporting.",
-    )
-    parser.add_argument("--wandb-project", help="Weights & Biases project name.")
-    parser.add_argument("--wandb-entity", help="Weights & Biases entity/team.")
-    parser.add_argument(
-        "--wandb-mode",
-        choices=["online", "offline", "disabled"],
-        help="Weights & Biases mode.",
-    )
-    parser.add_argument(
-        "--gradient-checkpointing",
-        action="store_true",
-        help="Enable gradient checkpointing for memory efficiency",
-    )
-    parser.add_argument(
-        "--use-fp8",
-        action="store_true",
-        help="Unsupported legacy option; use quantization_bits: 4 instead",
-    )
-    parser.add_argument(
-        "--use-dynamic-4bit",
-        action="store_true",
-        help="Unsupported legacy option; use standard quantization_bits: 4",
-    )
-    parser.add_argument(
-        "--attention-backend",
-        choices=["sdpa", "flash_attention_2", "auto"],
-        default="auto",
-        help="Attention backend (auto=SDPA)",
-    )
-    parser.add_argument(
-        "--enable-compile",
-        action="store_true",
-        help="Enable torch.compile in the trainer",
-    )
+    add_common_training_args(parser)
     parser.add_argument(
         "--max-plies",
         type=int,
@@ -235,13 +179,12 @@ def main() -> None:
     logger.debug("Full-game config: %s", asdict(full_cfg))
     logger.debug("Dataset path: %s", dataset_path)
 
-    estimated_calls = (2 * full_cfg.max_model_turns) + 4
-    if estimated_calls > 300:
-        logger.warning(
-            "High full-game cost: estimated up to %d KataGo calls per sample. "
-            "Tune full_game.max_model_turns/max_plies for speed.",
-            estimated_calls,
-        )
+    # Each model turn analyzes the position before and after its move, then asks
+    # KataGo for a reply; the final position is analyzed once more.
+    logger.info(
+        "Full-game cost: up to %d KataGo queries per sample (tune full_game.max_model_turns).",
+        3 * full_cfg.max_model_turns + 1,
+    )
 
     try:
         from datasets import load_dataset
@@ -260,13 +203,7 @@ def main() -> None:
     )
 
     run_name = run_name_for_config("grpo_fullgame", args.config)
-    quant_type = (
-        "fp8"
-        if args.use_fp8
-        else "dynamic-4bit"
-        if args.use_dynamic_4bit
-        else f"{train_cfg.quantization_bits}bit"
-    )
+    quant_type = f"{train_cfg.quantization_bits}bit"
     wandb_config = {
         "model_name": train_cfg.model_name,
         "max_seq_length": train_cfg.max_seq_length,
@@ -288,8 +225,6 @@ def main() -> None:
         "full_game_config": asdict(full_cfg),
     }
     wandb_tags = ["grpo", "rl", "fullgame", quant_type]
-    if args.use_fp8:
-        wandb_tags.extend(["fp8", "fp8-rl"])
     if args.enable_compile:
         wandb_tags.append("torch-compile")
 
@@ -308,7 +243,6 @@ def main() -> None:
     model, tokenizer = load_training_model(
         train_cfg, attention_backend=attention_backend,
         gradient_checkpointing=args.gradient_checkpointing,
-        use_dynamic=args.use_dynamic_4bit, use_fp8=args.use_fp8,
     )
 
     logger.info("Loading dataset from %s", dataset_path)
@@ -413,7 +347,6 @@ def main() -> None:
                 reward_cfg=reward_cfg,
                 rollout_cfg=rollout_cfg,
                 full_cfg=full_cfg,
-                seed=train_cfg.seed,
                 reasoning_cfg=train_cfg.reasoning,
                 model_name=train_cfg.model_name,
             ),

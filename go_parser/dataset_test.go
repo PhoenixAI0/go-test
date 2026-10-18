@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -144,5 +145,35 @@ func TestBuildDatasetSequentialWritesJSONL(t *testing.T) {
 	}
 	if !bytes.Contains(lines[0], []byte("\"board_size\": 5")) {
 		t.Fatalf("expected board_size in output line: %s", string(lines[0]))
+	}
+}
+
+func TestBuildDatasetCreatesEmptyOutputWithoutGames(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "out.jsonl")
+	count, err := buildDataset(dir, outputPath, 10, 1)
+	if err != nil || count != 0 {
+		t.Fatalf("buildDataset: count=%d err=%v", count, err)
+	}
+	if data, err := os.ReadFile(outputPath); err != nil || len(data) != 0 {
+		t.Fatalf("expected an empty output file, got %q (err=%v)", data, err)
+	}
+}
+
+func TestWriteSampleEscapesControlCharactersAsJSON(t *testing.T) {
+	var buf bytes.Buffer
+	writer := bufio.NewWriter(&buf)
+	if err := writeSample(writer, Sample{Prompt: "a\x1bb", Response: "A1", BoardSize: 5}); err != nil {
+		t.Fatalf("writeSample: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	var decoded Sample
+	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
+		t.Fatalf("output is not valid JSON: %v (%s)", err, buf.String())
+	}
+	if decoded.Prompt != "a\x1bb" {
+		t.Fatalf("unexpected prompt round trip: %q", decoded.Prompt)
 	}
 }

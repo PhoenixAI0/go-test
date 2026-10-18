@@ -34,6 +34,8 @@ def test_training_entrypoint_real_trainer(tmp_path, monkeypatch, script, config_
     from go_rl.board import BoardState
     from go_rl.katago import KataGoResult
 
+    # The shared loader selects its device independently of Trainer.use_cpu.
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     torch.set_num_threads(1)
     raw = Tokenizer(WordLevel({"[UNK]": 0, "[PAD]": 1, "[EOS]": 2, "A1": 3, "PASS": 4}, unk_token="[UNK]"))
     raw.pre_tokenizer = Whitespace()

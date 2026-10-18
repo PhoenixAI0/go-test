@@ -36,7 +36,6 @@ reward:
   winrate_scale: 1.0
   legal_bonus: 0.2
   illegal_penalty: -1.0
-  length_penalty: -0.05
   full_game_bonus: 0.5
   strict_legality: true
 rollout:
@@ -44,7 +43,6 @@ rollout:
   temperature: 1.0
   top_p: 0.9
   max_tokens: 16
-  stop_at_pass: true
 notes:
   promotion_gate: Train 19x19 after the 9x9 promotion gate is met.
 promotion_gate_fullgame:

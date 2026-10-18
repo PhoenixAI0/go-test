@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from contextlib import nullcontext
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,6 +32,7 @@ def test_reasoning_grpo_trainer_masks_reasoning_tokens(monkeypatch):
     trainer.reasoning_profile = "qwen3"
     trainer.processing_class = _Tokenizer()
     trainer.model = _Model()
+    trainer.accelerator = SimpleNamespace(autocast=nullcontext)
     trainer._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
 
     text = "<think>r</think> D4"
@@ -60,6 +63,7 @@ def test_reasoning_grpo_trainer_disabled_keeps_mask(monkeypatch):
     trainer.reasoning_profile = "plain"
     trainer.processing_class = _Tokenizer()
     trainer.model = _Model()
+    trainer.accelerator = SimpleNamespace(autocast=nullcontext)
     trainer._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
 
     completion_ids = _tensor_ids("D4").unsqueeze(0)
@@ -78,3 +82,35 @@ def test_reasoning_grpo_trainer_disabled_keeps_mask(monkeypatch):
 
     output = ReasoningGRPOTrainer._generate_and_score_completions(trainer, inputs=[{}])
     assert output["completion_mask"].equal(completion_mask)
+
+
+def test_reasoning_grpo_generation_and_rewards_use_autocast(monkeypatch):
+    trainer = ReasoningGRPOTrainer.__new__(ReasoningGRPOTrainer)
+    trainer.reasoning_config = ReasoningConfig(enabled=False)
+    trainer.model = _Model()
+    trainer.accelerator = SimpleNamespace(
+        autocast=lambda: torch.autocast("cpu", dtype=torch.bfloat16)
+    )
+    # K-bit preparation leaves the unquantized head in FP32, but the frozen
+    # transformer can return BF16 states. Unwrapped generation has no forward
+    # wrapper to reconcile those dtypes.
+    head = torch.nn.Linear(4, 2, bias=False)
+    hidden = torch.ones((1, 4), dtype=torch.bfloat16)
+    with pytest.raises(RuntimeError):
+        head(hidden)
+
+    def fake_super(_self, _inputs):
+        generation_logits = head(hidden)
+        # Full-game rewards generate more moves inside the same parent call.
+        reward_rollout_logits = head(hidden)
+        return {"generation": generation_logits, "reward": reward_rollout_logits}
+
+    monkeypatch.setattr(
+        "trl.trainer.grpo_trainer.GRPOTrainer._generate_and_score_completions",
+        fake_super,
+    )
+    output = trainer._generate_and_score_completions([{}])
+    assert all(value.dtype == torch.bfloat16 for value in output.values())
+    assert all(torch.isfinite(value).all() for value in output.values())
+    assert head.weight.dtype == torch.float32
+    assert not torch.is_autocast_enabled("cpu")

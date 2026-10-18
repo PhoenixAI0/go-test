@@ -9,7 +9,6 @@ from .config import ReasoningConfig
 from .reasoning import (
     build_chat_template_kwargs,
     build_final_only_mask,
-    build_generation_kwargs,
     detect_reasoning_profile,
 )
 
@@ -42,13 +41,6 @@ class ReasoningGRPOTrainer(GRPOTrainer):
             args_kwargs.update(chat_kwargs)
             self.args.chat_template_kwargs = args_kwargs
 
-        generation_kwargs = build_generation_kwargs(self.reasoning_config, self.reasoning_profile)
-        if generation_kwargs:
-            merged_generation = dict(getattr(self.args, "generation_kwargs", {}) or {})
-            merged_generation.update(generation_kwargs)
-            self.args.generation_kwargs = merged_generation
-            self.generation_kwargs = merged_generation
-
         if not hasattr(self, "_metrics"):
             self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
 
@@ -66,7 +58,13 @@ class ReasoningGRPOTrainer(GRPOTrainer):
         self,
         inputs: list[dict[str, torch.Tensor]],
     ) -> dict[str, torch.Tensor]:
-        output = super()._generate_and_score_completions(inputs)
+        # TRL unwraps the model for generation, bypassing Accelerate's forward
+        # autocast wrapper. K-bit preparation keeps the output head in FP32,
+        # while quantized layers can produce BF16/FP16 activations. Keep both
+        # generation and reward-time full-game rollouts in the configured AMP
+        # context without changing the model's parameter dtypes.
+        with self.accelerator.autocast():
+            output = super()._generate_and_score_completions(inputs)
         self._restore_checkpointing_options()
         if not self.reasoning_config.enabled or not self.reasoning_config.optimize_final_only:
             return output

@@ -12,7 +12,6 @@ from go_rl.rewards import (
     RewardBreakdown,
     evaluate_move,
     legality_reward,
-    length_reward,
     outcome_reward,
     winrate_reward,
 )
@@ -59,29 +58,6 @@ class TestRewardComponents:
         reward = legality_reward(is_legal=False, config=config)
         assert reward == -1.0
 
-    def test_length_reward_pass(self):
-        """Test PASS moves have no length penalty."""
-        config = RewardConfig(length_penalty=-0.05)
-
-        reward = length_reward("PASS", config)
-        assert reward == 0.0
-
-    def test_length_reward_short_move(self):
-        """Test short moves have no length penalty."""
-        config = RewardConfig(length_penalty=-0.05)
-
-        # Moves like "D4" (3 chars or less) should not be penalized
-        reward = length_reward("D4", config)
-        assert reward == 0.0
-
-    def test_length_reward_long_output(self):
-        """Test long output strings are penalized."""
-        config = RewardConfig(length_penalty=-0.05)
-
-        # Long strings (e.g., model rambling) should be penalized
-        reward = length_reward("This is a very long output", config)
-        assert reward == -0.05
-
     def test_outcome_reward_none(self):
         """Test no outcome gives zero reward."""
         config = RewardConfig(full_game_bonus=0.5)
@@ -112,7 +88,6 @@ class TestEvaluateMove:
         config = RewardConfig(
             winrate_scale=1.0,
             legal_bonus=0.2,
-            length_penalty=-0.05,
         )
 
         board = BoardState(size=9)
@@ -130,7 +105,6 @@ class TestEvaluateMove:
         # Check individual components
         assert breakdown.winrate == 0.05  # 0.05 * 1.0
         assert breakdown.legality == 0.2  # Legal bonus
-        assert breakdown.length == 0.0  # Short move, no penalty
         assert breakdown.outcome == 0.0  # No game result
 
         # Check total
@@ -238,7 +212,6 @@ class TestEvaluateMove:
             winrate_scale=2.0,
             legal_bonus=0.2,
             illegal_penalty=-1.0,
-            length_penalty=-0.05,
             full_game_bonus=0.5,
         )
 
@@ -263,7 +236,6 @@ class TestEvaluateMove:
 
         assert breakdown.winrate == 0.2
         assert breakdown.legality == 0.2
-        assert breakdown.length == 0.0
         assert breakdown.outcome == 0.0
         assert breakdown.total == 0.4
 
@@ -294,11 +266,10 @@ class TestRewardBreakdown:
         breakdown = RewardBreakdown(
             winrate=0.1,
             legality=0.2,
-            length=-0.05,
             outcome=0.5,
         )
 
-        expected_total = 0.1 + 0.2 - 0.05 + 0.5
+        expected_total = 0.1 + 0.2 + 0.5
         assert breakdown.total == expected_total
 
     def test_reward_breakdown_all_zeros(self):
@@ -306,7 +277,6 @@ class TestRewardBreakdown:
         breakdown = RewardBreakdown(
             winrate=0.0,
             legality=0.0,
-            length=0.0,
             outcome=0.0,
         )
 
@@ -317,7 +287,6 @@ class TestRewardBreakdown:
         breakdown = RewardBreakdown(
             winrate=-0.3,
             legality=-1.0,
-            length=-0.05,
             outcome=0.0,
         )
 
@@ -365,6 +334,5 @@ def test_reward_config_defaults():
     assert config.winrate_scale == 1.0
     assert config.legal_bonus == 0.2
     assert config.illegal_penalty == -1.0
-    assert config.length_penalty == -0.05
     assert config.full_game_bonus == 0.5
     assert config.strict_legality is False

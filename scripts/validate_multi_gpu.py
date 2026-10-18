@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 from typing import List, Tuple
-from venv_utils import ensure_virtualenv, uv_pip_install
+from venv_utils import ensure_virtualenv
 
 
 def check_gpu_availability() -> Tuple[bool, str, int]:
@@ -98,7 +97,7 @@ def check_accelerate_configs() -> Tuple[bool, str, List[str]]:
     return True, f"All {len(found)} accelerate configs found", found
 
 
-def check_accelerate_installation(auto_install: bool = True) -> Tuple[bool, str]:
+def check_accelerate_installation() -> Tuple[bool, str]:
     """Check if accelerate is installed.
 
     Returns:
@@ -106,22 +105,9 @@ def check_accelerate_installation(auto_install: bool = True) -> Tuple[bool, str]
     """
     try:
         import accelerate
-
-        version = accelerate.__version__
-        return True, f"Accelerate installed (version {version})"
     except ImportError:
-        if not auto_install:
-            return False, "Accelerate is not installed (run: uv sync --locked)"
-        try:
-            uv_pip_install(["accelerate"])
-        except subprocess.CalledProcessError as exc:
-            return False, f"Accelerate install failed: {exc}"
-        try:
-            import accelerate
-        except ImportError as exc:
-            return False, f"Accelerate import failed after install: {exc}"
-        version = accelerate.__version__
-        return True, f"Accelerate installed (version {version})"
+        return False, "Accelerate is not installed (run: uv sync --locked)"
+    return True, f"Accelerate installed (version {accelerate.__version__})"
 
 
 def validate_accelerate_config(config_path: str, expected_gpus: int) -> Tuple[bool, str]:

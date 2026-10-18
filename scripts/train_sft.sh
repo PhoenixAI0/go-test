@@ -120,7 +120,7 @@ fi
 # Build command
 if [ -z "$MULTI_GPU" ]; then
     # Single GPU mode
-    CMD="uv run python scripts/run_sft.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
+    CMD=(uv run python scripts/run_sft.py --config "$CONFIG_FILE" --log-level "$LOG_LEVEL")
 else
     if [ "$MULTI_GPU" = "auto" ]; then
         if command -v nvidia-smi &>/dev/null; then
@@ -158,22 +158,22 @@ else
         echo -e "${RED}Error: Accelerate config not found: $ACCELERATE_CONFIG${NC}"
         exit 1
     fi
-    CMD="uv run accelerate launch --config_file=$ACCELERATE_CONFIG scripts/run_sft.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
+    CMD=(uv run accelerate launch --config_file="$ACCELERATE_CONFIG" scripts/run_sft.py --config "$CONFIG_FILE" --log-level "$LOG_LEVEL")
     echo -e "${GREEN}Multi-GPU training enabled: ${MULTI_GPU} GPU(s)${NC}"
 fi
 
 if [ "$GRADIENT_CHECKPOINTING" = true ]; then
-    CMD="$CMD --gradient-checkpointing"
+    CMD+=(--gradient-checkpointing)
     echo -e "${YELLOW}Gradient checkpointing enabled${NC}"
 fi
 
 if [ "$SMOKE_TEST" = true ]; then
-    CMD="$CMD --smoke"
+    CMD+=(--smoke)
     echo -e "${YELLOW}Running in SMOKE TEST mode (minimal training for verification)${NC}"
 fi
 
 if [ "$USE_WANDB" = true ]; then
-    CMD="$CMD --wandb --wandb-project $WANDB_PROJECT"
+    CMD+=(--wandb --wandb-project "$WANDB_PROJECT")
     echo -e "${YELLOW}Weights & Biases logging enabled (project: $WANDB_PROJECT)${NC}"
 fi
 
@@ -187,14 +187,11 @@ echo "  - Smoke test: $SMOKE_TEST"
 echo "  - W&B enabled: $USE_WANDB"
 echo ""
 echo -e "${YELLOW}Starting SFT training...${NC}"
-echo "Command: $CMD"
+echo "Command: ${CMD[*]}"
 echo ""
 
-# Run training
-$CMD
-
-# Check if training succeeded
-if [ $? -eq 0 ]; then
+# Run training; under set -e only an `if` can observe the failure.
+if "${CMD[@]}"; then
     echo ""
     echo -e "${GREEN}=========================================="
     echo "SFT Training Complete!"

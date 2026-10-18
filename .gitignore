@@ -52,6 +52,7 @@ katago/
 *.cfg
 !config/katago_analysis_train.cfg
 !config/katago_analysis_eval.cfg
+!config/katago_gtp_eval.cfg
 
 # Environment
 .env

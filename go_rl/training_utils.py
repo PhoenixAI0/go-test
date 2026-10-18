@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 from typing import Optional
@@ -9,18 +10,29 @@ from .config import VALID_QUANTIZATION_BITS
 logger = logging.getLogger(__name__)
 
 
-def quantization_kwargs(
-    bits: int,
-    use_dynamic: bool = False,
-    use_fp8: bool = False,
-) -> dict[str, bool | str]:
+def quantization_kwargs(bits: int) -> dict[str, bool]:
     if bits not in VALID_QUANTIZATION_BITS:
         raise ValueError(f"quantization_bits must be one of {VALID_QUANTIZATION_BITS}.")
-    if use_fp8:
-        raise ValueError("FP8 training is not supported by this launcher; use quantization_bits: 4.")
-    if use_dynamic:
-        raise ValueError("Dynamic Unsloth quantization is not supported; use standard NF4 (quantization_bits: 4).")
     return {"load_in_4bit": bits == 4, "load_in_8bit": bits == 8}
+
+
+def add_common_training_args(parser: argparse.ArgumentParser) -> None:
+    """Options shared by the SFT and GRPO stage scripts."""
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--log-level", default="INFO",
+                        help="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).")
+    parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases reporting.")
+    parser.add_argument("--wandb-project", help="Weights & Biases project name.")
+    parser.add_argument("--wandb-entity", help="Weights & Biases entity/team.")
+    parser.add_argument("--wandb-mode", choices=["online", "offline", "disabled"],
+                        help="Weights & Biases mode.")
+    parser.add_argument("--gradient-checkpointing", action="store_true",
+                        help="Enable gradient checkpointing for memory efficiency")
+    parser.add_argument("--attention-backend", choices=["sdpa", "flash_attention_2", "auto"],
+                        default="auto", help="Attention backend (auto=SDPA)")
+    parser.add_argument("--enable-compile", action="store_true",
+                        help="Enable torch.compile in the trainer")
 
 
 def default_num_workers() -> int:
@@ -126,8 +138,7 @@ def precision_kwargs(bits: int = 4) -> dict[str, bool]:
 
 
 def load_training_model(config: object, *, attention_backend: str | None = None,
-                        gradient_checkpointing: bool = False,
-                        use_dynamic: bool = False, use_fp8: bool = False):
+                        gradient_checkpointing: bool = False):
     """Load a base model or continue its saved adapter on the local training device.
 
     An adapter checkpoint always reloads its original base, then restores trainable
@@ -140,7 +151,7 @@ def load_training_model(config: object, *, attention_backend: str | None = None,
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, set_seed
     from transformers.utils.peft_utils import find_adapter_config_file
 
-    flags = quantization_kwargs(config.quantization_bits, use_dynamic, use_fp8)
+    flags = quantization_kwargs(config.quantization_bits)
     quantized = any(flags.values())
     use_lora = getattr(config, "use_lora", True)
     if quantized and not use_lora:

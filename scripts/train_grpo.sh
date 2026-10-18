@@ -140,7 +140,7 @@ fi
 # Build command
 if [ -z "$MULTI_GPU" ]; then
     # Single GPU mode
-    CMD="uv run python scripts/run_grpo.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
+    CMD=(uv run python scripts/run_grpo.py --config "$CONFIG_FILE" --log-level "$LOG_LEVEL")
 else
     if [ "$MULTI_GPU" = "auto" ]; then
         if command -v nvidia-smi &>/dev/null; then
@@ -178,22 +178,22 @@ else
         echo -e "${RED}Error: Accelerate config not found: $ACCELERATE_CONFIG${NC}"
         exit 1
     fi
-    CMD="uv run accelerate launch --config_file=$ACCELERATE_CONFIG scripts/run_grpo.py --config $CONFIG_FILE --log-level $LOG_LEVEL"
+    CMD=(uv run accelerate launch --config_file="$ACCELERATE_CONFIG" scripts/run_grpo.py --config "$CONFIG_FILE" --log-level "$LOG_LEVEL")
     echo -e "${GREEN}Multi-GPU training enabled: ${MULTI_GPU} GPU(s)${NC}"
 fi
 
 if [ "$GRADIENT_CHECKPOINTING" = true ]; then
-    CMD="$CMD --gradient-checkpointing"
+    CMD+=(--gradient-checkpointing)
     echo -e "${YELLOW}Gradient checkpointing enabled${NC}"
 fi
 
 if [ "$SMOKE_TEST" = true ]; then
-    CMD="$CMD --smoke"
+    CMD+=(--smoke)
     echo -e "${YELLOW}Running in SMOKE TEST mode (minimal training for verification)${NC}"
 fi
 
 if [ "$USE_WANDB" = true ]; then
-    CMD="$CMD --wandb --wandb-project $WANDB_PROJECT"
+    CMD+=(--wandb --wandb-project "$WANDB_PROJECT")
     echo -e "${YELLOW}Weights & Biases logging enabled (project: $WANDB_PROJECT)${NC}"
 fi
 
@@ -208,14 +208,11 @@ echo "  - W&B enabled: $USE_WANDB"
 echo "  - KataGo: $KATAGO_BIN"
 echo ""
 echo -e "${YELLOW}Starting GRPO training...${NC}"
-echo "Command: $CMD"
+echo "Command: ${CMD[*]}"
 echo ""
 
-# Run training
-$CMD
-
-# Check if training succeeded
-if [ $? -eq 0 ]; then
+# Run training; under set -e only an `if` can observe the failure.
+if "${CMD[@]}"; then
     echo ""
     echo -e "${GREEN}=========================================="
     echo "GRPO Training Complete!"
@@ -226,8 +223,8 @@ if [ $? -eq 0 ]; then
     echo ""
     if [ "$SMOKE_TEST" = false ]; then
         echo "Next steps:"
-        echo "1. Evaluate the trained model with KataGo matches"
-        echo "2. Run: uv run python scripts/eval_elo.py --katago-bin \$KATAGO_BIN ..."
+        echo "1. Create a match config: uv run python scripts/create_match_config.py ..."
+        echo "2. Run: uv run python scripts/eval_elo.py --match-config CONFIG"
         echo ""
         if [ "$BOARD_SIZE" = "9x9" ]; then
             echo "Consider promoting to 19x19 if Elo threshold is met!"

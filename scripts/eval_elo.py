@@ -1,25 +1,8 @@
 #!/usr/bin/env python3
-"""Run KataGo match for Elo evaluation.
+"""Evaluate a trained model against KataGo and estimate an Elo difference.
 
-This script runs a match between a trained model and KataGo to evaluate
-the model's playing strength via Elo rating.
-
-Before running this script:
-1. Create a match config using scripts/create_match_config.py, OR
-2. Manually edit one of the templates in config/katago_match_*.cfg
-
-Example usage:
-    # Using a pre-generated match config
-    uv run python scripts/eval_elo.py \\
-        --katago-bin /path/to/katago \\
-        --match-config config/my_match.cfg
-
-    # Using template (requires manual editing first)
-    uv run python scripts/eval_elo.py \\
-        --katago-bin /path/to/katago \\
-        --match-config config/katago_match_9x9.cfg \\
-        --log-file logs/match_9x9.log \\
-        --sgf-dir match_sgfs/9x9
+Create a match config with scripts/create_match_config.py, then run:
+    uv run python scripts/eval_elo.py --match-config config/my_match.cfg
 """
 
 from __future__ import annotations
@@ -27,13 +10,12 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import re
-import subprocess
 import sys
 from pathlib import Path
-from typing import Optional, TypedDict
+from typing import TypedDict
 
+from go_rl.gtp_match import MatchConfig, run_match
 from go_rl.wandb_utils import configure_wandb, finish_wandb, log_training_metrics
 from venv_utils import ensure_virtualenv
 
@@ -75,26 +57,7 @@ def _snapshot_sgf_files(sgf_dir: Path) -> dict[str, tuple[int, int, int]]:
     return file_stats
 
 
-def _parse_match_config_player_name(match_config_path: str) -> Optional[str]:
-    """Extract player1 name from a KataGo match config."""
-    try:
-        content = Path(match_config_path).read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return None
-    match = re.search(
-        r"player1\s*=\s*\{[^}]*?\bname\s*=\s*([^\n\r]+)",
-        content,
-        flags=re.DOTALL,
-    )
-    if not match:
-        return None
-    value = match.group(1).strip()
-    if value.startswith('"') and value.endswith('"'):
-        value = value[1:-1]
-    return value.strip() or None
-
-
-def _extract_winner_color(result: str) -> Optional[str]:
+def _extract_winner_color(result: str) -> str | None:
     normalized = result.strip().upper()
     if normalized.startswith("B+"):
         return "B"
@@ -201,125 +164,52 @@ def summarize_match_results(
 
 def main() -> None:
     ensure_virtualenv()
-    parser = argparse.ArgumentParser(
-        description="Run KataGo match for Elo evaluation",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Run match with custom config
-  uv run python scripts/eval_elo.py \\
-      --katago-bin /usr/local/bin/katago \\
-      --match-config config/my_match.cfg
-
-  # Run match with template (edit template first!)
-  uv run python scripts/eval_elo.py \\
-      --katago-bin $KATAGO_BIN \\
-      --match-config config/katago_match_9x9.cfg
-
-For more information, see docs/EVALUATION_GUIDE.md
-        """,
-    )
-    parser.add_argument(
-        "--katago-bin",
-        required=True,
-        help="Path to KataGo binary",
-    )
-    parser.add_argument(
-        "--match-config",
-        required=True,
-        help="Path to match configuration file",
-    )
-    parser.add_argument(
-        "--log-file",
-        default="match.log",
-        help="Path to write match log (default: match.log)",
-    )
-    parser.add_argument(
-        "--sgf-dir",
-        default="match_sgfs",
-        help="Directory to write SGF files (default: match_sgfs)",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print command without executing",
-    )
-    parser.add_argument(
-        "--summary-json",
-        help="Optional path to write JSON summary metrics.",
-    )
-    parser.add_argument(
-        "--model-name",
-        help=(
-            "Model player name for SGF result parsing. "
-            "Defaults to player1 name from match config."
-        ),
-    )
-    parser.add_argument(
-        "--katago-name",
-        help="Optional KataGo player name for metadata only.",
-    )
-    parser.add_argument(
-        "--wandb",
-        action="store_true",
-        help="Enable Weights & Biases reporting for evaluation metrics.",
-    )
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--match-config", required=True,
+                        help="Match config from scripts/create_match_config.py")
+    parser.add_argument("--log-file", default="match.log",
+                        help="Match log, including engine stderr (default: match.log)")
+    parser.add_argument("--sgf-dir", help="SGF output directory (default: from the match config)")
+    parser.add_argument("--dry-run", action="store_true", help="Print the match plan without playing")
+    parser.add_argument("--summary-json", help="Optional path to write JSON summary metrics.")
+    parser.add_argument("--model-name", help="Override the model name from the match config.")
+    parser.add_argument("--katago-name", help="Override the KataGo name from the match config.")
+    parser.add_argument("--wandb", action="store_true",
+                        help="Enable Weights & Biases reporting for evaluation metrics.")
     parser.add_argument("--wandb-project", help="Weights & Biases project name.")
     parser.add_argument("--wandb-entity", help="Weights & Biases entity/team.")
-    parser.add_argument(
-        "--wandb-mode",
-        choices=["online", "offline", "disabled"],
-        help="Weights & Biases mode.",
-    )
-    parser.add_argument(
-        "--wandb-prefix",
-        default="eval",
-        help="Metric prefix for W&B logs (default: eval).",
-    )
-    parser.add_argument(
-        "--wandb-run-name",
-        help="Optional custom W&B run name for evaluation.",
-    )
+    parser.add_argument("--wandb-mode", choices=["online", "offline", "disabled"],
+                        help="Weights & Biases mode.")
+    parser.add_argument("--wandb-prefix", default="eval",
+                        help="Metric prefix for W&B logs (default: eval).")
+    parser.add_argument("--wandb-run-name", help="Optional custom W&B run name for evaluation.")
     args = parser.parse_args()
 
-    katago_bin = os.path.expanduser(os.path.expandvars(args.katago_bin))
-    match_config = os.path.expanduser(os.path.expandvars(args.match_config))
-
-    if not os.path.exists(katago_bin):
-        print(f"Error: KataGo binary not found: {katago_bin}", file=sys.stderr)
-        print("Set KATAGO_BIN environment variable or provide --katago-bin", file=sys.stderr)
+    try:
+        config = MatchConfig.load(args.match_config)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"Error: Invalid match config {args.match_config}: {exc}", file=sys.stderr)
+        print("Create one with scripts/create_match_config.py.", file=sys.stderr)
         sys.exit(1)
+    if args.model_name:
+        config.model.name = args.model_name
+    if args.katago_name:
+        config.katago.name = args.katago_name
+    sgf_dir = Path(args.sgf_dir or config.sgf_output_dir)
+    log_file = Path(args.log_file)
 
-    if not os.path.exists(match_config):
-        print(f"Error: Match config not found: {match_config}", file=sys.stderr)
-        print("\nTo create a match config:", file=sys.stderr)
-        print("  1. Use scripts/create_match_config.py, OR", file=sys.stderr)
-        print("  2. Edit a template from config/katago_match_*.cfg", file=sys.stderr)
-        sys.exit(1)
+    print(f"Match: {config.model.name} vs {config.katago.name}, {config.num_games} games "
+          f"on {config.board_size}x{config.board_size}")
+    print(f"  Model: {config.model.command}")
+    print(f"  KataGo: {config.katago.command}")
+    print(f"  Log: {log_file}")
+    print(f"  SGF output: {sgf_dir}/")
+    if args.dry_run:
+        print("Dry run - not playing")
+        return
 
-    with open(match_config, "r", encoding="utf-8") as f:
-        config_content = f.read()
-        if "/path/to/" in config_content or "${" in config_content:
-            print(f"Warning: Match config contains placeholder paths: {match_config}", file=sys.stderr)
-            print("Please edit the config and replace placeholders with actual paths", file=sys.stderr)
-            print("", file=sys.stderr)
-
-    log_dir = os.path.dirname(args.log_file)
-    if log_dir and not os.path.exists(log_dir):
-        os.makedirs(log_dir, exist_ok=True)
-    if not os.path.exists(args.sgf_dir):
-        os.makedirs(args.sgf_dir, exist_ok=True)
-    pre_match_sgf_stats = _snapshot_sgf_files(Path(args.sgf_dir))
-
-    model_name = args.model_name or _parse_match_config_player_name(match_config)
-    if not model_name:
-        print(
-            "Error: Could not infer model name from match config. Pass --model-name.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    run_name = args.wandb_run_name or f"eval_{Path(match_config).stem}"
+    run_name = args.wandb_run_name or f"eval_{Path(args.match_config).stem}"
     wandb_enabled = configure_wandb(
         args.wandb,
         run_name,
@@ -327,52 +217,25 @@ For more information, see docs/EVALUATION_GUIDE.md
         entity=args.wandb_entity,
         mode=args.wandb_mode,
         config={
-            "match_config": match_config,
-            "sgf_dir": args.sgf_dir,
-            "model_name": model_name,
-            "katago_name": args.katago_name,
+            "match_config": args.match_config,
+            "sgf_dir": str(sgf_dir),
+            "model_name": config.model.name,
+            "katago_name": config.katago.name,
         },
         tags=["eval", "katago-match"],
     )
-
-    cmd = [
-        katago_bin,
-        "match",
-        "-config",
-        match_config,
-        "-log-file",
-        args.log_file,
-        "-sgf-output-dir",
-        args.sgf_dir,
-    ]
-
-    print(f"Running KataGo match:")
-    print(f"  Binary: {katago_bin}")
-    print(f"  Config: {match_config}")
-    print(f"  Log: {args.log_file}")
-    print(f"  SGF output: {args.sgf_dir}/")
-    print(f"  Command: {' '.join(cmd)}")
-    print()
-
-    if args.dry_run:
-        print("Dry run - not executing")
-        if wandb_enabled:
-            finish_wandb()
-        return
-
+    sgf_dir.mkdir(parents=True, exist_ok=True)
+    pre_match_sgf_stats = _snapshot_sgf_files(sgf_dir)
     try:
-        subprocess.run(cmd, check=True)
-        print(f"\nMatch completed successfully!")
-        print(f"  Results logged to: {args.log_file}")
-        print(f"  SGF files written to: {args.sgf_dir}/")
+        run_match(config, sgf_dir, log_file)
         summary = summarize_match_results(
-            sgf_dir=args.sgf_dir,
-            model_name=model_name,
-            katago_name=args.katago_name,
+            sgf_dir=str(sgf_dir),
+            model_name=config.model.name,
+            katago_name=config.katago.name,
             baseline_sgf_stats=pre_match_sgf_stats,
         )
         print(
-            "  Summary: "
+            "Summary: "
             f"win_rate={summary['win_rate']:.4f}, "
             f"score_rate={summary['score_rate']:.4f}, "
             f"elo_delta={summary['elo_delta']:.2f}, "
@@ -388,7 +251,7 @@ For more information, see docs/EVALUATION_GUIDE.md
                 json.dumps(summary, indent=2, sort_keys=True),
                 encoding="utf-8",
             )
-            print(f"  JSON summary written to: {summary_path}")
+            print(f"JSON summary written to: {summary_path}")
 
         if wandb_enabled:
             prefix = args.wandb_prefix.rstrip("/")
@@ -405,9 +268,9 @@ For more information, see docs/EVALUATION_GUIDE.md
                 f"{prefix}/stale_sgf_files_ignored": summary["stale_sgf_files_ignored"],
             }
             log_training_metrics(step=0, metrics=metrics)
-    except subprocess.CalledProcessError as e:
-        print(f"\nError: Match failed with exit code {e.returncode}", file=sys.stderr)
-        print(f"Check log file for details: {args.log_file}", file=sys.stderr)
+    except (OSError, RuntimeError) as exc:
+        print(f"\nError: Match failed: {exc}", file=sys.stderr)
+        print(f"Check the log file for details: {log_file}", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
         print("\nMatch interrupted by user", file=sys.stderr)

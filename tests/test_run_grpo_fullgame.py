@@ -4,7 +4,6 @@ import importlib.util
 import sys
 from pathlib import Path
 
-import pytest
 
 from go_rl.config import FullGameConfig, RewardConfig, RolloutConfig
 from go_rl.fullgame_rollout import FullGameEpisodeResult
@@ -50,7 +49,6 @@ def test_build_fullgame_reward_fn_returns_scalar_per_sample(monkeypatch):
             scorelead_reward=0.5,
             terminal_reward=1.0,
             legality_reward_total=-0.2,
-            length_reward_total=-0.05,
             model_turns=2,
             plies_played=3,
             truncated=False,
@@ -72,7 +70,6 @@ def test_build_fullgame_reward_fn_returns_scalar_per_sample(monkeypatch):
         reward_cfg=RewardConfig(),
         rollout_cfg=RolloutConfig(),
         full_cfg=FullGameConfig(),
-        seed=123,
     )
 
     rewards = reward_fn(
@@ -93,7 +90,6 @@ def test_fullgame_reward_fn_runs_on_worker_rank(monkeypatch):
         reward_cfg=RewardConfig(),
         rollout_cfg=RolloutConfig(),
         full_cfg=FullGameConfig(),
-        seed=123,
     )
 
     from types import SimpleNamespace
@@ -115,7 +111,6 @@ def test_fullgame_reward_fn_uses_configured_max_plies(monkeypatch):
             scorelead_reward=0.0,
             terminal_reward=0.0,
             legality_reward_total=0.0,
-            length_reward_total=0.0,
             model_turns=1,
             plies_played=1,
             truncated=False,
@@ -135,7 +130,6 @@ def test_fullgame_reward_fn_uses_configured_max_plies(monkeypatch):
         reward_cfg=RewardConfig(),
         rollout_cfg=RolloutConfig(),
         full_cfg=FullGameConfig(max_plies=6),
-        seed=456,
     )
 
     reward_fn(prompts=[_prompt()], completions=["D4"])
@@ -156,7 +150,6 @@ def test_fullgame_reward_fn_aligns_board_turn_to_model_color(monkeypatch):
             scorelead_reward=0.0,
             terminal_reward=0.0,
             legality_reward_total=0.0,
-            length_reward_total=0.0,
             model_turns=1,
             plies_played=1,
             truncated=False,
@@ -176,7 +169,6 @@ def test_fullgame_reward_fn_aligns_board_turn_to_model_color(monkeypatch):
         reward_cfg=RewardConfig(),
         rollout_cfg=RolloutConfig(),
         full_cfg=FullGameConfig(model_color_mode="black"),
-        seed=789,
     )
 
     prompt = "\n".join(
@@ -231,6 +223,6 @@ def test_fullgame_reward_keeps_generated_position_and_side(monkeypatch):
 
     monkeypatch.setattr(module, "simulate_full_game", simulate)
     reward = module.build_fullgame_reward_fn(object(), object(), _NoopKataGo(), RewardConfig(),
-        RolloutConfig(), FullGameConfig(seed_empty_board_prob=1, model_color_mode="black"), seed=123)
+        RolloutConfig(), FullGameConfig(seed_empty_board_prob=1, model_color_mode="black"))
     reward([board.to_prompt()] * 2, ["F6", "F6"])
     assert observed == [(board.to_prompt(), "W")] * 2

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Set, Tuple
+from typing import Iterator, List, Optional, Set, Tuple
 
 _GTP_COLUMNS = "ABCDEFGHJKLMNOPQRST"
 _STONE = {"B": 1, "W": 2}
@@ -147,9 +147,6 @@ class BoardState:
     def has_snapshot(self) -> bool:
         return self.board_snapshot is not None
 
-    def has_move_history(self) -> bool:
-        return bool(self.moves) and self.board_snapshot is None
-
     def clone(self) -> "BoardState":
         if self.board_snapshot is not None:
             return BoardState.from_matrix(
@@ -160,21 +157,36 @@ class BoardState:
             )
         return BoardState(size=self.size, moves=list(self.moves))
 
+    def _replay(self) -> Iterator[List[List[int]]]:
+        """Yield the empty board, then a fresh board after each recorded move."""
+        board = [[_EMPTY for _ in range(self.size)] for _ in range(self.size)]
+        yield board
+        for index, (player, coords) in enumerate(self.moves, start=1):
+            if coords is not None:
+                color = _STONE.get(player.upper())
+                if color is None:
+                    raise ValueError(f"Unknown player at move {index}: {player}")
+                try:
+                    board = _apply_strict_move(board, color, coords)
+                except ValueError as exc:
+                    raise ValueError(f"Illegal move at {index}: {player} {coords}") from exc
+            yield board
+
     def _current_board(self) -> List[List[int]]:
         if self.board_snapshot is not None:
             return _copy_board(self.board_snapshot)
-        board = [[_EMPTY for _ in range(self.size)] for _ in range(self.size)]
-        for index, (player, coords) in enumerate(self.moves, start=1):
-            if coords is None:
-                continue
-            color = _STONE.get(player.upper())
-            if color is None:
-                raise ValueError(f"Unknown player at move {index}: {player}")
-            try:
-                board = _apply_strict_move(board, color, coords)
-            except ValueError as exc:
-                raise ValueError(f"Illegal move at {index}: {player} {coords}") from exc
+        *_, board = self._replay()
         return board
+
+    def position_history(self) -> List[List[List[int]]]:
+        """All known whole-board positions so far, oldest first (for superko).
+
+        Snapshot boards only know their current and previous positions.
+        """
+        if self.board_snapshot is not None:
+            positions = [self.previous_board_snapshot, self.board_snapshot]
+            return [_copy_board(board) for board in positions if board is not None]
+        return list(self._replay())
 
     def current_board(self) -> List[List[int]]:
         return self._current_board()
@@ -232,23 +244,10 @@ class BoardState:
         self,
     ) -> Tuple[List[List[int]], Optional[List[List[int]]]]:
         if self.board_snapshot is not None:
-            previous = (
-                _copy_board(self.previous_board_snapshot)
-                if self.previous_board_snapshot is not None
-                else None
-            )
-            return _copy_board(self.board_snapshot), previous
-        board = [[_EMPTY for _ in range(self.size)] for _ in range(self.size)]
-        previous: Optional[List[List[int]]] = None
-        for player, coords in self.moves:
-            previous = _copy_board(board)
-            if coords is None:
-                continue
-            color = _STONE.get(player.upper())
-            if color is None:
-                raise ValueError(f"Unknown player: {player}")
-            board = _apply_strict_move(board, color, coords)
-        return board, previous
+            return _copy_board(self.board_snapshot), self.previous_board()
+        positions = list(self._replay())
+        # The ko comparison point is the position before the last move (or pass).
+        return positions[-1], positions[-2] if len(positions) > 1 else None
 
     def is_strict_legal(self, player: str, coords: Optional[Tuple[int, int]]) -> bool:
         if coords is None:

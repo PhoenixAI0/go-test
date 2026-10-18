@@ -173,7 +173,7 @@ def test_simulate_full_game_illegal_move_ends_game():
     assert result.total_reward < 0.0
 
 
-def test_simulate_full_game_respects_basic_legality_application():
+def _suicide_board() -> BoardState:
     board = BoardState.empty(5)
     board.apply_move("B", "A1", strict=True)
     board.apply_move("W", "C2", strict=True)
@@ -183,25 +183,63 @@ def test_simulate_full_game_respects_basic_legality_application():
     board.apply_move("W", "B3", strict=True)
     board.apply_move("B", "A4", strict=True)
     board.apply_move("W", "D3", strict=True)
-
+    # C3 is basic-legal (empty) but suicide for Black.
     assert board.is_basic_legal(gtp_to_coords("C3", board.size)) is True
     assert board.is_strict_legal("B", gtp_to_coords("C3", board.size)) is False
+    return board
 
-    katago = _StubKataGo(score_lead=0.0, move="PASS")
+
+def test_simulate_full_game_rejects_suicide_at_basic_legality():
+    # KataGo plays under real rules, so applying a basic-legal suicide would
+    # corrupt the game. It must be penalized and never reach the board.
+    board = _suicide_board()
     result = simulate_full_game(
         board=board,
         initial_completion="C3",
         model=_DummyModel(),
         tokenizer=_DummyTokenizer(),
-        katago=katago,
+        katago=_StubKataGo(score_lead=0.0, move="PASS"),
         reward_cfg=RewardConfig(strict_legality=False, illegal_move_ends_game=True),
         rollout_cfg=RolloutConfig(),
         fullgame_cfg=FullGameConfig(max_model_turns=1, max_plies=10),
         model_color="B",
     )
 
+    assert result.terminated_by_illegal is True
+    assert result.plies_played == 0
+    assert result.legality_reward_total == RewardConfig().illegal_penalty
+    assert board.current_board() == _suicide_board().current_board()
+
+
+def test_simulate_full_game_illegal_move_without_ending_does_not_count_as_ply(monkeypatch):
+    analyzed: list[BoardState] = []
+
+    class _RecordingKataGo(_StubKataGo):
+        def analyze_position(self, board: BoardState) -> KataGoResult:
+            analyzed.append(board.clone())
+            return super().analyze_position(board)
+
+    monkeypatch.setattr("go_rl.fullgame_rollout.generate_model_move", lambda **_: "PASS")
+    result = simulate_full_game(
+        board=_suicide_board(),
+        initial_completion="C3",
+        model=_DummyModel(),
+        tokenizer=_DummyTokenizer(),
+        katago=_RecordingKataGo(score_lead=0.0, move="PASS"),
+        reward_cfg=RewardConfig(strict_legality=True, illegal_move_ends_game=False),
+        rollout_cfg=RolloutConfig(),
+        fullgame_cfg=FullGameConfig(max_model_turns=2, max_plies=10),
+        model_color="B",
+    )
+
+    # The illegal C3 is retried as a PASS from the same position: two model
+    # turns, but only the PASS is a ply.
     assert result.terminated_by_illegal is False
+    assert result.model_turns == 2
     assert result.plies_played == 1
+    # The rejected move never reaches KataGo.
+    c3 = gtp_to_coords("C3", 5)
+    assert analyzed and all(("B", c3) not in item.moves for item in analyzed)
 
 
 def test_simulate_full_game_analysis_cache_reuses_final_position():
@@ -279,6 +317,8 @@ def test_generation_uses_cache_and_restores_training_mode(monkeypatch, fail):
         def generate(self, **kwargs):
             assert not self.training
             assert kwargs["use_cache"] is True
+            # Thinking controls belong to the chat template; generate rejects them.
+            assert "enable_thinking" not in kwargs
             assert not torch.is_grad_enabled()
             if fail:
                 raise RuntimeError("generation failed")
@@ -286,11 +326,69 @@ def test_generation_uses_cache_and_restores_training_mode(monkeypatch, fail):
 
     model = Model()
     tokenizer = SimpleNamespace(eos_token_id=0, decode=lambda *args, **kwargs: "PASS")
+    template_kwargs = []
     monkeypatch.setattr("go_rl.fullgame_rollout.build_generation_inputs",
-                        lambda **kwargs: {"input_ids": torch.tensor([[1]])})
+                        lambda **kwargs: template_kwargs.append(kwargs["chat_template_kwargs"])
+                        or {"input_ids": torch.tensor([[1]])})
+    thinking = {"enable_thinking": False}
     if fail:
         with pytest.raises(RuntimeError, match="generation failed"):
-            generate_model_move(model, tokenizer, BoardState.empty(9), RolloutConfig(), "plain")
+            generate_model_move(model, tokenizer, BoardState.empty(9), RolloutConfig(), "qwen3", thinking)
     else:
-        assert generate_model_move(model, tokenizer, BoardState.empty(9), RolloutConfig(), "plain") == "PASS"
+        assert generate_model_move(model, tokenizer, BoardState.empty(9), RolloutConfig(), "qwen3", thinking) == "PASS"
+    assert template_kwargs == [thinking]
     assert model.training
+
+
+def test_generation_inherits_autocast_for_mixed_precision_head(monkeypatch):
+    torch = pytest.importorskip("torch")
+    from types import SimpleNamespace
+    from go_rl.fullgame_rollout import generate_model_move
+
+    class Model(torch.nn.Module):
+        device = "cpu"
+
+        def __init__(self):
+            super().__init__()
+            self.lm_head = torch.nn.Linear(2, 2, bias=False)
+
+        def generate(self, **kwargs):
+            # K-bit training keeps the output head in FP32 while transformer
+            # activations can be BF16. Nested rollout generation needs the
+            # enclosing trainer's autocast context just like the first move.
+            hidden_states = torch.ones(1, 2, dtype=torch.bfloat16)
+            logits = self.lm_head(hidden_states)
+            assert logits.dtype == torch.bfloat16
+            assert not self.training
+            assert not torch.is_grad_enabled()
+            return torch.cat((kwargs["input_ids"], logits.argmax(-1, keepdim=True)), dim=1)
+
+    model = Model()
+    tokenizer = SimpleNamespace(eos_token_id=0, decode=lambda *args, **kwargs: "PASS")
+    monkeypatch.setattr("go_rl.fullgame_rollout.build_generation_inputs",
+                        lambda **kwargs: {"input_ids": torch.tensor([[1]])})
+    with pytest.raises(RuntimeError, match="dtype|scalar type"):
+        generate_model_move(model, tokenizer, BoardState.empty(9), RolloutConfig(), "plain")
+
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        move = generate_model_move(model, tokenizer, BoardState.empty(9), RolloutConfig(), "plain")
+
+    assert move == "PASS"
+    assert model.training
+    assert model.lm_head.weight.dtype == torch.float32
+
+
+@pytest.mark.parametrize("completion,illegal", [("I'll play D4", True), ("d4", True), ("D4", False)])
+def test_simulate_full_game_requires_bare_move_answer(completion, illegal):
+    result = simulate_full_game(
+        board=BoardState.empty(9),
+        initial_completion=completion,
+        model=_DummyModel(),
+        tokenizer=_DummyTokenizer(),
+        katago=_StubKataGo(score_lead=0.0, move="PASS"),
+        reward_cfg=RewardConfig(strict_legality=True),
+        rollout_cfg=RolloutConfig(),
+        fullgame_cfg=FullGameConfig(max_plies=1),
+        model_color="B",
+    )
+    assert result.terminated_by_illegal is illegal

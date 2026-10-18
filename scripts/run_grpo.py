@@ -24,10 +24,11 @@ from go_rl.logging_utils import setup_logging
 from go_rl.prompting import parse_prompt
 from go_rl.reasoning import detect_reasoning_profile, strip_reasoning_for_reward
 from go_rl.rewards import evaluate_move, is_legal_coords
-from go_rl.rollout import normalize_move
+from go_rl.rollout import parse_move_answer
 from go_rl.run_logging import write_run_log
 from go_rl.shared_types import BoardKey, KataGoService, board_key
 from go_rl.training_utils import (
+    add_common_training_args,
     configure_torch_for_speed,
     default_num_workers,
     get_distributed_context,
@@ -65,7 +66,6 @@ def _analyze_unique_positions(
 def build_reward_fn(
     katago: KataGoService,
     reward_cfg: RewardConfig,
-    rollout_cfg: RolloutConfig,
     reasoning_cfg: Optional[ReasoningConfig] = None,
     model_name: str = "",
     tokenizer: object | None = None,
@@ -78,11 +78,10 @@ def build_reward_fn(
     )
 
     def reward_fn(
-        prompts: list[str], completions: list[str], **_: object
+        prompts: list[str], completions: list[str], **kwargs: object
     ) -> list[float]:
-        if katago is None:
-            raise RuntimeError("KataGo must be initialized on every training rank.")
-        prompts = _.get("board_prompt", prompts)
+        # Score the raw board, not the chat-templated prompt the model saw.
+        prompts = kwargs.get("board_prompt", prompts)
         if len(prompts) != len(completions):
             raise ValueError("Prompts and completions must have matching lengths.")
         rewards: list[float] = []
@@ -110,32 +109,20 @@ def build_reward_fn(
                 "candidate_key": None,
             }
 
-            reward_text = strip_reasoning_for_reward(completion, profile=profile)
-            try:
-                move = normalize_move(reward_text, stop_at_pass=rollout_cfg.stop_at_pass)
-                entry["reward_move"] = move
-            except ValueError:
-                logger.debug(
-                    "Failed to normalize completion after reasoning strip: %r",
-                    completion,
-                    exc_info=True,
-                )
+            move = parse_move_answer(strip_reasoning_for_reward(completion, profile=profile))
+            entry["reward_move"] = move
+            if not move:
+                # Anything but a bare move is a format error, penalized as illegal.
                 entries.append(entry)
                 continue
 
             try:
                 coords = gtp_to_coords(move, board.size)
-                valid_coords = True
             except ValueError:
                 logger.debug("Invalid move coords: %r", move, exc_info=True)
-                coords = None
-                valid_coords = False
-            if not valid_coords:
                 entries.append(entry)
                 continue
-
-            is_legal = is_legal_coords(board, player, coords, reward_cfg)
-            if not is_legal:
+            if not is_legal_coords(board, player, coords, reward_cfg):
                 entries.append(entry)
                 continue
 
@@ -161,26 +148,13 @@ def build_reward_fn(
             board = entry["board"]
             player = str(entry["player"])
             move = str(entry["reward_move"])
-            base_key = entry["base_key"]
-            base_analysis = base_cache.get(base_key)
-            if base_analysis is None:
-                breakdown = evaluate_move(board, move, 0.0, reward_cfg, player=player)
-                rewards.append(breakdown.total)
-                continue
-
             candidate_key = entry["candidate_key"]
-            candidate_analysis = (
-                candidate_cache.get(candidate_key) if candidate_key is not None else None
-            )
-            if candidate_analysis is None:
-                breakdown = evaluate_move(board, move, 0.0, reward_cfg, player=player)
-                rewards.append(breakdown.total)
-                continue
-
-            # The KataGo client requests all values from Black's perspective.
-            delta = candidate_analysis.winrate - base_analysis.winrate
-            if player == "W":
-                delta = -delta
+            delta = 0.0  # Unplayable moves earn only the illegal-move penalty.
+            if candidate_key is not None:
+                # The KataGo client requests all values from Black's perspective.
+                delta = candidate_cache[candidate_key].winrate - base_cache[entry["base_key"]].winrate
+                if player == "W":
+                    delta = -delta
             breakdown = evaluate_move(board, move, delta, reward_cfg, player=player)
             rewards.append(breakdown.total)
         return rewards
@@ -191,51 +165,7 @@ def build_reward_fn(
 def main() -> None:
     ensure_virtualenv()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--smoke", action="store_true")
-    parser.add_argument(
-        "--log-level",
-        default="INFO",
-        help="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).",
-    )
-    parser.add_argument(
-        "--wandb",
-        action="store_true",
-        help="Enable Weights & Biases reporting.",
-    )
-    parser.add_argument("--wandb-project", help="Weights & Biases project name.")
-    parser.add_argument("--wandb-entity", help="Weights & Biases entity/team.")
-    parser.add_argument(
-        "--wandb-mode",
-        choices=["online", "offline", "disabled"],
-        help="Weights & Biases mode.",
-    )
-    parser.add_argument(
-        "--gradient-checkpointing",
-        action="store_true",
-        help="Enable gradient checkpointing for memory efficiency",
-    )
-    parser.add_argument(
-        "--use-fp8",
-        action="store_true",
-        help="Unsupported legacy option; use quantization_bits: 4 instead",
-    )
-    parser.add_argument(
-        "--use-dynamic-4bit",
-        action="store_true",
-        help="Unsupported legacy option; use standard quantization_bits: 4",
-    )
-    parser.add_argument(
-        "--attention-backend",
-        choices=["sdpa", "flash_attention_2", "auto"],
-        default="auto",
-        help="Attention backend (auto=SDPA)",
-    )
-    parser.add_argument(
-        "--enable-compile",
-        action="store_true",
-        help="Enable torch.compile in the trainer",
-    )
+    add_common_training_args(parser)
     args = parser.parse_args()
 
     setup_logging(args.log_level)
@@ -273,7 +203,7 @@ def main() -> None:
     )
 
     run_name = run_name_for_config("grpo", args.config)
-    quant_type = "fp8" if args.use_fp8 else "dynamic-4bit" if args.use_dynamic_4bit else f"{train_cfg.quantization_bits}bit"
+    quant_type = f"{train_cfg.quantization_bits}bit"
     wandb_config = {
         "model_name": train_cfg.model_name,
         "max_seq_length": train_cfg.max_seq_length,
@@ -294,8 +224,6 @@ def main() -> None:
         "reward_config": asdict(reward_cfg),
     }
     wandb_tags = ["grpo", "rl", quant_type]
-    if args.use_fp8:
-        wandb_tags.extend(["fp8", "fp8-rl"])
     if args.enable_compile:
         wandb_tags.append("torch-compile")
 
@@ -314,7 +242,6 @@ def main() -> None:
     model, tokenizer = load_training_model(
         train_cfg, attention_backend=attention_backend,
         gradient_checkpointing=args.gradient_checkpointing,
-        use_dynamic=args.use_dynamic_4bit, use_fp8=args.use_fp8,
     )
 
     logger.info("Loading dataset from %s", dataset_path)
@@ -407,7 +334,6 @@ def main() -> None:
             reward_funcs=build_reward_fn(
                 katago=katago,
                 reward_cfg=reward_cfg,
-                rollout_cfg=rollout_cfg,
                 reasoning_cfg=train_cfg.reasoning,
                 model_name=train_cfg.model_name,
                 tokenizer=tokenizer,

@@ -25,4 +25,4 @@ uv run --locked python -m go_rl.cuda_check --quantization-bits 16 --optimizer ad
 uv run --locked python scripts/setup_katago.py
 ./scripts/compile_go_parser.sh
 mkdir -p data/sgf_9x9 data/sgf_19x19 outputs logs
-echo "Setup complete. Start training with ./scripts/train_cuda.sh --skip-setup"
+echo "Setup complete. Start training with ./scripts/run_full_pipeline.sh --skip-setup"

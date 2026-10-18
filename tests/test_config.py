@@ -147,7 +147,6 @@ def test_rollout_config_defaults():
     assert config.temperature == 1.0
     assert config.top_p == 0.9
     assert config.max_tokens == 4
-    assert config.stop_at_pass is True
 
 
 def test_rollout_config_custom_values():
@@ -156,13 +155,11 @@ def test_rollout_config_custom_values():
         temperature=0.8,
         top_p=0.95,
         max_tokens=8,
-        stop_at_pass=False,
     )
     assert config.num_samples == 16
     assert config.temperature == 0.8
     assert config.top_p == 0.95
     assert config.max_tokens == 8
-    assert config.stop_at_pass is False
 
 
 def test_reward_config_defaults():
@@ -170,7 +167,6 @@ def test_reward_config_defaults():
     assert config.winrate_scale == 1.0
     assert config.legal_bonus == 0.2
     assert config.illegal_penalty == -1.0
-    assert config.length_penalty == -0.05
     assert config.full_game_bonus == 0.5
     assert config.scorelead_scale == 0.02
     assert config.terminal_outcome_bonus == 1.0
@@ -183,7 +179,6 @@ def test_reward_config_custom_values():
         winrate_scale=2.0,
         legal_bonus=0.5,
         illegal_penalty=-2.0,
-        length_penalty=-0.1,
         full_game_bonus=1.0,
         scorelead_scale=0.03,
         terminal_outcome_bonus=1.5,
@@ -193,7 +188,6 @@ def test_reward_config_custom_values():
     assert config.winrate_scale == 2.0
     assert config.legal_bonus == 0.5
     assert config.illegal_penalty == -2.0
-    assert config.length_penalty == -0.1
     assert config.full_game_bonus == 1.0
     assert config.scorelead_scale == 0.03
     assert config.terminal_outcome_bonus == 1.5
@@ -233,7 +227,6 @@ def test_fullgame_config_defaults():
     assert config.opponent_policy == "katago_best"
     assert config.model_color_mode == "alternate"
     assert config.seed_empty_board_prob == 0.4
-    assert config.max_seed_prefix_moves == 40
     assert config.max_model_turns == 150
 
 
@@ -242,8 +235,6 @@ def test_fullgame_config_validation():
         FullGameConfig(seed_empty_board_prob=-0.1)
     with pytest.raises(ValueError, match="max_plies"):
         FullGameConfig(max_plies=0)
-    with pytest.raises(ValueError, match="max_seed_prefix_moves"):
-        FullGameConfig(max_seed_prefix_moves=-1)
     with pytest.raises(ValueError, match="max_model_turns"):
         FullGameConfig(max_model_turns=0)
     with pytest.raises(ValueError, match="opponent_policy"):
@@ -522,7 +513,6 @@ def test_load_config_rollout(tmp_path):
     yaml_content = """
 num_samples: 16
 temperature: 0.8
-stop_at_pass: false
 """
     yaml_file = tmp_path / "rollout.yaml"
     yaml_file.write_text(yaml_content)
@@ -531,7 +521,6 @@ stop_at_pass: false
     assert isinstance(config, RolloutConfig)
     assert config.num_samples == 16
     assert config.temperature == 0.8
-    assert config.stop_at_pass is False
 
 
 def test_load_config_fullgame(tmp_path):

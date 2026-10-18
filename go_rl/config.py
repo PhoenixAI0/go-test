@@ -55,7 +55,6 @@ class RolloutConfig:
     temperature: float = 1.0
     top_p: float = 0.9
     max_tokens: int = 4
-    stop_at_pass: bool = True
 
 
 @dataclass
@@ -66,7 +65,6 @@ class FullGameConfig:
     opponent_policy: str = "katago_best"
     model_color_mode: str = "alternate"
     seed_empty_board_prob: float = 0.4
-    max_seed_prefix_moves: int = 40
     max_model_turns: int = 150
 
     def __post_init__(self) -> None:
@@ -74,8 +72,6 @@ class FullGameConfig:
             raise ValueError("seed_empty_board_prob must be in [0.0, 1.0].")
         if self.max_plies < 1:
             raise ValueError("max_plies must be >= 1.")
-        if self.max_seed_prefix_moves < 0:
-            raise ValueError("max_seed_prefix_moves must be >= 0.")
         if self.max_model_turns < 1:
             raise ValueError("max_model_turns must be >= 1.")
         if self.opponent_policy not in {"katago_best"}:
@@ -89,7 +85,6 @@ class RewardConfig:
     winrate_scale: float = 1.0
     legal_bonus: float = 0.2
     illegal_penalty: float = -1.0
-    length_penalty: float = -0.05
     full_game_bonus: float = 0.5
     scorelead_scale: float = 0.02
     terminal_outcome_bonus: float = 1.0

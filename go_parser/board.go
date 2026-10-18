@@ -21,11 +21,11 @@ type Coord struct {
 }
 
 type BoardState struct {
-	size        int
-	moves       []Move
-	board       []byte
-	prevBoard   []byte
-	invalid     bool
+	size      int
+	moves     []Move
+	board     []byte
+	prevBoard []byte
+	invalid   bool
 }
 
 func NewBoardState(size int) *BoardState {

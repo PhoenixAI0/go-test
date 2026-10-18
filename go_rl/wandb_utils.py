@@ -69,16 +69,17 @@ def configure_wandb(
         return False
 
 
-def log_training_metrics(
-    step: int,
-    metrics: Mapping[str, object],
-    commit: bool = True,
-) -> None:
+def log_training_metrics(step: int, metrics: Mapping[str, object]) -> None:
+    """Log one row against the trainer's step axis.
+
+    Post-training logs can't use wandb's own step: it only increases, so earlier
+    steps would be dropped. Transformers charts every metric by train/global_step.
+    """
     try:
         import wandb
 
         if wandb.run is not None:
-            wandb.log(metrics, step=step, commit=commit)
+            wandb.log({**metrics, "train/global_step": step})
     except ImportError:
         pass
     except Exception as exc:
@@ -105,7 +106,7 @@ def log_prefixed_history(
         if "loss" in entry:
             metrics[f"{metric_prefix}loss"] = float(entry["loss"])
         if metrics:
-            log_training_metrics(step=int(step), metrics=metrics, commit=False)
+            log_training_metrics(step=int(step), metrics=metrics)
 
 
 def log_system_metrics() -> None:

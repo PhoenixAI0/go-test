@@ -2,12 +2,13 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 )
@@ -19,18 +20,13 @@ type Sample struct {
 	BoardSize int    `json:"board_size"`
 }
 
-func buildDataset(sgfDir string, outputPath string, maxPositions int, workers int) (int, error) {
-	if maxPositions <= 0 {
-		return 0, nil
-	}
-
+func buildDataset(sgfDir string, outputPath string, maxPositions int, workers int) (count int, err error) {
 	files, err := listSgfFiles(sgfDir)
 	if err != nil {
 		return 0, err
 	}
 	if len(files) == 0 {
 		log.Printf("No SGF files found in %s", sgfDir)
-		return 0, nil
 	}
 
 	if workers <= 0 {
@@ -38,20 +34,28 @@ func buildDataset(sgfDir string, outputPath string, maxPositions int, workers in
 	}
 	runtime.GOMAXPROCS(workers)
 
+	// Always create the output so callers can read an empty dataset.
 	outFile, err := os.Create(outputPath)
 	if err != nil {
 		return 0, err
 	}
-	defer outFile.Close()
+	defer func() {
+		// A failed close can mean lost data; never report a truncated file as success.
+		if closeErr := outFile.Close(); err == nil {
+			err = closeErr
+		}
+	}()
 
 	writer := bufio.NewWriterSize(outFile, 1024*1024)
-	defer writer.Flush()
-
-	useParallel := workers > 1 && len(files) >= workers
-	if useParallel {
-		return writeParallel(files, writer, maxPositions, workers)
+	if workers > 1 && len(files) >= workers {
+		count, err = writeParallel(files, writer, maxPositions, workers)
+	} else {
+		count, err = writeSequential(files, writer, maxPositions)
 	}
-	return writeSequential(files, writer, maxPositions)
+	if err != nil {
+		return count, err
+	}
+	return count, writer.Flush()
 }
 
 func listSgfFiles(sgfDir string) ([]string, error) {
@@ -92,8 +96,7 @@ func writeSequential(files []string, writer *bufio.Writer, maxPositions int) (in
 				break
 			}
 			if err := writeSample(writer, sample); err != nil {
-				log.Printf("Error writing sample: %v", err)
-				continue
+				return collected, err
 			}
 			collected++
 			if collected%10000 == 0 {
@@ -146,8 +149,7 @@ func writeParallel(files []string, writer *bufio.Writer, maxPositions int, worke
 					break
 				}
 				if err := writeSample(writer, sample); err != nil {
-					log.Printf("Error writing sample: %v", err)
-					continue
+					return collected, err
 				}
 				collected++
 				if collected%10000 == 0 {
@@ -216,28 +218,18 @@ func samplePositions(game *SgfGame, maxPositions int) ([]Sample, error) {
 	return samples, nil
 }
 
+// writeSample matches Python's json.dumps layout. Go string quoting is not JSON
+// (for example \x1b), so strings are escaped with encoding/json.
 func writeSample(writer *bufio.Writer, sample Sample) error {
-	prompt := strconv.QuoteToASCII(sample.Prompt)
-	response := strconv.QuoteToASCII(sample.Response)
-	_, err := writer.WriteString("{\"prompt\": ")
+	prompt, err := json.Marshal(sample.Prompt)
 	if err != nil {
 		return err
 	}
-	if _, err = writer.WriteString(prompt); err != nil {
+	response, err := json.Marshal(sample.Response)
+	if err != nil {
 		return err
 	}
-	if _, err = writer.WriteString(", \"response\": "); err != nil {
-		return err
-	}
-	if _, err = writer.WriteString(response); err != nil {
-		return err
-	}
-	if _, err = writer.WriteString(", \"board_size\": "); err != nil {
-		return err
-	}
-	if _, err = writer.WriteString(strconv.Itoa(sample.BoardSize)); err != nil {
-		return err
-	}
-	_, err = writer.WriteString("}\n")
+	_, err = fmt.Fprintf(writer, "{\"prompt\": %s, \"response\": %s, \"board_size\": %d}\n",
+		prompt, response, sample.BoardSize)
 	return err
 }

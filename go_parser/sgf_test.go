@@ -68,3 +68,24 @@ func TestParseSGFF3PassMove(t *testing.T) {
 		t.Fatalf("expected FF[3] tt move to be PASS")
 	}
 }
+
+func TestParseSGFFF4TtPassMove(t *testing.T) {
+	// Many FF[4] writers still emit FF[3]-style [tt] passes on small boards.
+	path := writeTempSGF(t, "(;GM[1]FF[4]SZ[9];B[dd];W[tt];B[ee])")
+	game, err := parseSGFFile(path)
+	if err != nil {
+		t.Fatalf("parse SGF: %v", err)
+	}
+	if len(game.Moves) != 3 || game.Moves[1].Coords != nil {
+		t.Fatalf("expected FF[4] tt move to be PASS, got %+v", game.Moves)
+	}
+}
+
+func TestParseSGFRejectsInvalidBoardSize(t *testing.T) {
+	for _, size := range []string{"-1", "0", "25", "x"} {
+		path := writeTempSGF(t, "(;GM[1]FF[4]SZ["+size+"];B[aa])")
+		if _, err := parseSGFFile(path); err == nil {
+			t.Fatalf("expected SZ[%s] to be rejected", size)
+		}
+	}
+}

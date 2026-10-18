@@ -22,13 +22,11 @@ dependencies = [
     "wandb>=0.18.0",
 ]
 
-[project.optional-dependencies]
+# uv installs this group by default, so `uv run pytest` works without extra flags.
+[dependency-groups]
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.6.0",
-]
-upload = [
-    "huggingface_hub>=0.24.0",
 ]
 
 [tool.uv]

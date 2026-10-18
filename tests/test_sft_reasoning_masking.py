@@ -65,7 +65,6 @@ def test_sft_reasoning_completion_mask_masks_thinking_tokens():
     tokenizer = _Tokenizer()
     sample = module._convert_to_messages(
         {"prompt": PROMPT, "response": "<think>analysis</think> D4"},
-        eos_token="",
     )
 
     processed = module._add_reasoning_completion_mask(
@@ -88,7 +87,6 @@ def test_sft_reasoning_disabled_keeps_full_completion_mask():
     tokenizer = _Tokenizer()
     sample = module._convert_to_messages(
         {"prompt": PROMPT, "response": "<think>analysis</think> D4"},
-        eos_token="",
     )
 
     processed = module._add_reasoning_completion_mask(
@@ -117,7 +115,7 @@ def test_sft_generation_prefix_and_single_eos_are_preserved():
             return self.encode(messages[0]["content"] + "<think></think>")
 
     tokenizer = PrefixTokenizer()
-    sample = module._convert_to_messages({"prompt": "board", "response": "D4"}, tokenizer.eos_token)
+    sample = module._convert_to_messages({"prompt": "board", "response": "D4"})
     output = module._add_reasoning_completion_mask(sample, tokenizer, "qwen3", "mask_all", True, True, {})
     boundary = len("board<think></think>")
     assert output["input_ids"] == tokenizer.encode("board<think></think>D4") + [0]

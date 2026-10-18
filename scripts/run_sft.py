@@ -16,6 +16,7 @@ from go_rl.reasoning import (
 from go_rl.logging_utils import setup_logging
 from go_rl.run_logging import write_run_log
 from go_rl.training_utils import (
+    add_common_training_args,
     configure_torch_for_speed,
     default_num_workers,
     get_optimal_attention_backend,
@@ -54,13 +55,12 @@ class _MaskedSample(TypedDict):
     completion_mask: list[int]
 
 
-def _convert_to_messages(example: _SftExample, eos_token: str) -> _ReasoningSample:
-    prompt = example["prompt"]
+def _convert_to_messages(example: _SftExample) -> _ReasoningSample:
+    # The chat template supplies the assistant EOS exactly once.
     response = example["response"]
-    completion = response  # The tokenizer supplies the assistant EOS exactly once.
     return {
-        "prompt": [{"role": "user", "content": prompt}],
-        "completion": [{"role": "assistant", "content": completion}],
+        "prompt": [{"role": "user", "content": example["prompt"]}],
+        "completion": [{"role": "assistant", "content": response}],
         "raw_completion": response,
     }
 
@@ -129,57 +129,13 @@ def _log_perplexity_history(log_history: list[dict], wandb_enabled: bool) -> Non
             metrics["val/loss"] = val_loss
             metrics["val/perplexity"] = _safe_perplexity(val_loss)
         if metrics:
-            log_training_metrics(step=int(step), metrics=metrics, commit=False)
+            log_training_metrics(step=int(step), metrics=metrics)
 
 
 def main() -> None:
     ensure_virtualenv()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--smoke", action="store_true")
-    parser.add_argument(
-        "--log-level",
-        default="INFO",
-        help="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).",
-    )
-    parser.add_argument(
-        "--wandb",
-        action="store_true",
-        help="Enable Weights & Biases reporting.",
-    )
-    parser.add_argument("--wandb-project", help="Weights & Biases project name.")
-    parser.add_argument("--wandb-entity", help="Weights & Biases entity/team.")
-    parser.add_argument(
-        "--wandb-mode",
-        choices=["online", "offline", "disabled"],
-        help="Weights & Biases mode.",
-    )
-    parser.add_argument(
-        "--gradient-checkpointing",
-        action="store_true",
-        help="Enable gradient checkpointing for memory efficiency",
-    )
-    parser.add_argument(
-        "--use-fp8",
-        action="store_true",
-        help="Unsupported legacy option; use quantization_bits: 4 instead",
-    )
-    parser.add_argument(
-        "--use-dynamic-4bit",
-        action="store_true",
-        help="Unsupported legacy option; use standard quantization_bits: 4",
-    )
-    parser.add_argument(
-        "--attention-backend",
-        choices=["sdpa", "flash_attention_2", "auto"],
-        default="auto",
-        help="Attention backend (auto=SDPA)",
-    )
-    parser.add_argument(
-        "--enable-compile",
-        action="store_true",
-        help="Enable torch.compile in the trainer",
-    )
+    add_common_training_args(parser)
     args = parser.parse_args()
 
     setup_logging(args.log_level)
@@ -201,7 +157,7 @@ def main() -> None:
 
     # Prepare wandb configuration with hyperparameters
     run_name = run_name_for_config("sft", args.config)
-    quant_type = "fp8" if args.use_fp8 else "dynamic-4bit" if args.use_dynamic_4bit else f"{cfg.quantization_bits}bit"
+    quant_type = f"{cfg.quantization_bits}bit"
     wandb_config = {
         "model_name": cfg.model_name,
         "max_seq_length": cfg.max_seq_length,
@@ -220,8 +176,6 @@ def main() -> None:
         "eval_steps": cfg.eval_steps,
     }
     wandb_tags = ["sft", quant_type]
-    if args.use_fp8:
-        wandb_tags.append("fp8")
     if args.enable_compile:
         wandb_tags.append("torch-compile")
 
@@ -240,7 +194,6 @@ def main() -> None:
     model, tokenizer = load_training_model(
         cfg, attention_backend=attention_backend,
         gradient_checkpointing=args.gradient_checkpointing,
-        use_dynamic=args.use_dynamic_4bit, use_fp8=args.use_fp8,
     )
 
     reasoning_profile = detect_reasoning_profile(
@@ -258,10 +211,8 @@ def main() -> None:
         logger.info("Smoke run enabled: using %d rows", smoke_count)
         dataset = dataset.select(range(smoke_count))
 
-    eos_token = tokenizer.eos_token or ""
     dataset = dataset.map(
         _convert_to_messages,
-        fn_kwargs={"eos_token": eos_token},
         remove_columns=[col for col in dataset.column_names if col not in {"prompt", "response"}],
     )
     dataset = dataset.map(

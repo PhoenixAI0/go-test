@@ -2,38 +2,7 @@ import pytest
 
 from go_rl.board import BoardState
 from go_rl.config import RewardConfig
-from go_rl.rewards import evaluate_move, length_reward, outcome_reward, winrate_reward
-
-
-def test_length_reward_rules():
-    config = RewardConfig(length_penalty=-0.25)
-    assert length_reward("PASS", config) == 0.0
-    assert length_reward("A1", config) == 0.0
-    assert length_reward("ABCD", config) == -0.25  # len("ABCD") = 4, > 3, so penalized
-
-
-@pytest.mark.parametrize(
-    "move,length_penalty,expected",
-    [
-        ("PASS", -0.1, 0.0),  # PASS always returns 0
-        ("A1", -0.1, 0.0),  # len=2, not penalized
-        ("A9", -0.1, 0.0),  # len=2, not penalized
-        ("J1", -0.1, 0.0),  # len=2, not penalized
-        ("A10", -0.1, 0.0),  # len=3, not penalized (<=3)
-        ("D4", -0.5, 0.0),  # len=2, not penalized
-        ("K10", -0.5, 0.0),  # len=3, not penalized (<=3)
-        ("pass", -0.25, -0.25),  # lowercase pass is len=4, penalized
-        ("PASS", -0.1, 0.0),  # PASS
-        ("  A1  ", -0.1, 0.0),  # Whitespace stripped, len=2
-        ("ABCD", -0.25, -0.25),  # len=4, penalized
-        ("A10B", -0.1, -0.1),  # len=4, penalized
-    ],
-)
-def test_length_reward_parametrized(move, length_penalty, expected):
-    """Test length reward calculation for various moves (penalizes len > 3 after strip)."""
-    config = RewardConfig(length_penalty=length_penalty)
-    result = length_reward(move, config)
-    assert result == expected, f"length_reward({move!r}) = {result}, expected {expected}"
+from go_rl.rewards import evaluate_move, outcome_reward, winrate_reward
 
 
 def test_outcome_reward_rules():
@@ -113,7 +82,6 @@ def test_evaluate_move_total_reward():
         winrate_scale=1.0,
         legal_bonus=0.2,
         illegal_penalty=-1.0,
-        length_penalty=-0.1,
         full_game_bonus=0.5,
     )
     board = BoardState.empty(9)
@@ -125,12 +93,10 @@ def test_evaluate_move_total_reward():
         config=config,
     )
 
-    # winrate: 0.3, legality: 0.2, length: 0.0, outcome: 0.0
-    expected_total = 0.3 + 0.2 + 0.0 + 0.0
+    expected_total = 0.3 + 0.2
     assert breakdown.total == expected_total
     assert breakdown.winrate == 0.3
     assert breakdown.legality == 0.2
-    assert breakdown.length == 0.0
     assert breakdown.outcome == 0.0
 
 
@@ -140,13 +106,12 @@ def test_evaluate_move_with_all_components():
         winrate_scale=2.0,
         legal_bonus=0.5,
         illegal_penalty=-2.0,
-        length_penalty=-0.25,
         full_game_bonus=1.0,
     )
     board = BoardState.empty(19)
     breakdown = evaluate_move(
         board,
-        "ABCD",  # Long move (len=4, > 3, so penalized)
+        "ABCD",  # Not a move
         winrate_delta=0.2,
         game_result=1.0,  # Win
         config=config,
@@ -154,13 +119,11 @@ def test_evaluate_move_with_all_components():
 
     # winrate: 0.2 * 2.0 = 0.4
     # legality: -2.0 (illegal move "ABCD")
-    # length: -0.25 (len > 3)
     # outcome: 1.0 (win)
     assert breakdown.winrate == 0.4
     assert breakdown.legality == -2.0  # Illegal move
-    assert breakdown.length == -0.25
     assert breakdown.outcome == 1.0
-    assert breakdown.total == 0.4 + (-2.0) - 0.25 + 1.0
+    assert breakdown.total == 0.4 + (-2.0) + 1.0
 
 
 @pytest.mark.parametrize(
@@ -177,7 +140,6 @@ def test_evaluate_move_various_scenarios(move, is_legal, winrate_delta, game_res
     config = RewardConfig(
         legal_bonus=0.2,
         illegal_penalty=-1.0,
-        length_penalty=-0.1,
         full_game_bonus=0.5,
     )
     board = BoardState.empty(9)
@@ -200,7 +162,7 @@ def test_evaluate_move_various_scenarios(move, is_legal, winrate_delta, game_res
 
     # Check that total includes all components
     assert breakdown.total == (
-        breakdown.winrate + breakdown.legality + breakdown.length + breakdown.outcome
+        breakdown.winrate + breakdown.legality + breakdown.outcome
     )
 
 
@@ -212,3 +174,26 @@ def test_superko_validates_moves_without_name_error():
     assert not is_legal_coords(board, "B", (-1, 1), config)
     board.apply_move("B", "B2")
     assert not is_legal_coords(board, "W", (1, 1), config)
+
+
+def test_superko_rejects_recreated_position_that_simple_ko_allows():
+    from go_rl.board import BoardState, gtp_to_coords
+    from go_rl.rewards import is_legal_coords
+
+    board = BoardState.empty(5)
+    # White B4 sits in a ko: Black C4 captures it, and White B4 would recapture.
+    for player, move in (("B", "B5"), ("W", "B4"), ("B", "A4"), ("W", "C5"),
+                         ("B", "B3"), ("W", "C3"), ("B", "PASS"), ("W", "D4")):
+        board.apply_move(player, move, strict=True)
+    board.apply_move("B", "C4", strict=True)
+    recapture = gtp_to_coords("B4", 5)
+    ko, superko = RewardConfig(legality_level="ko"), RewardConfig(legality_level="superko")
+    assert not is_legal_coords(board, "W", recapture, ko)
+
+    # After two passes simple ko allows the recapture, but it recreates the
+    # position from before Black's capture.
+    board.apply_move("W", "PASS", strict=True)
+    board.apply_move("B", "PASS", strict=True)
+    assert is_legal_coords(board, "W", recapture, ko)
+    assert not is_legal_coords(board, "W", recapture, superko)
+    assert is_legal_coords(board, "W", gtp_to_coords("E1", 5), superko)

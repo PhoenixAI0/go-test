@@ -10,7 +10,6 @@
 - `logs/` stores run logs.
 - `tests/` is the pytest suite.
 - `PLAN/` tracks work-in-progress notes.
-- `scripts/scratch/test.py` is a scratch file, not a test suite.
 
 ## Build, Test, and Development Commands
 This repo is Python-first for training/inference code. SGF dataset parsing relies on the Go SGF parser (`go_parser/sgf_parser`); scripts will install Go and compile the parser when needed.
@@ -22,7 +21,7 @@ Setup and validation:
 Dataset prep:
 - `./scripts/prepare_data.sh` builds `data/sft_*.jsonl` and `data/rl_prompts_*.jsonl`.
 - `uv run python scripts/prepare_datasets.py --sgf-dir data/sgf_9x9 --tag 9x9`
-- `uv run python scripts/fast_build_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl` (uses Go parser if available).
+- `uv run python scripts/build_sft_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl` (compiles the Go parser if needed).
 - `uv run python scripts/download_sgf.py --manual-instructions --board-size 9`
 
 Training:
@@ -34,7 +33,7 @@ Training:
 
 Evaluation:
 - `uv run python scripts/create_match_config.py --output config/my_match.cfg --model-command "uv run python ..."`
-- `uv run python scripts/eval_elo.py --katago-bin $KATAGO_BIN --match-config config/my_match.cfg`
+- `uv run python scripts/eval_elo.py --match-config config/my_match.cfg`
 
 Model upload:
 - `uv run python scripts/upload_to_hub.py --model outputs/grpo_9x9 --repo-id user/repo --board-size 9 --push-only`

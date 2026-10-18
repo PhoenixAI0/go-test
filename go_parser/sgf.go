@@ -16,7 +16,6 @@ type Move struct {
 // SgfGame represents a parsed SGF game.
 type SgfGame struct {
 	BoardSize   int
-	FileFormat  int
 	Moves       []Move
 	SetupStones []Move
 }
@@ -52,7 +51,6 @@ func parseSGFFile(path string) (*SgfGame, error) {
 			return nil, err
 		}
 	}
-	fileFormat := parseFileFormat(root)
 
 	setup, err := parseSetupStones(root, boardSize)
 	if err != nil {
@@ -61,7 +59,7 @@ func parseSGFFile(path string) (*SgfGame, error) {
 
 	moves := make([]Move, 0, len(nodes)-1)
 	for _, node := range nodes[1:] {
-		move, ok, err := parseMoveNode(node, boardSize, fileFormat)
+		move, ok, err := parseMoveNode(node, boardSize)
 		if err != nil {
 			return nil, err
 		}
@@ -72,7 +70,6 @@ func parseSGFFile(path string) (*SgfGame, error) {
 
 	return &SgfGame{
 		BoardSize:   boardSize,
-		FileFormat:  fileFormat,
 		Moves:       moves,
 		SetupStones: setup,
 	}, nil
@@ -84,23 +81,11 @@ func parseBoardSize(raw string) (int, error) {
 		return 19, nil
 	}
 	size, err := strconv.Atoi(value)
-	if err != nil {
+	// GTP move labels only cover boards up to 19x19.
+	if err != nil || size < 1 || size > len(gtpColumns) {
 		return 0, fmt.Errorf("invalid board size: %s", raw)
 	}
 	return size, nil
-}
-
-func parseFileFormat(root sgfNode) int {
-	if vals, ok := root.Props["FF"]; ok && len(vals) > 0 {
-		value := strings.TrimSpace(vals[0])
-		if value == "" {
-			return 4
-		}
-		if ff, err := strconv.Atoi(value); err == nil {
-			return ff
-		}
-	}
-	return 4
 }
 
 func parseSetupStones(root sgfNode, boardSize int) ([]Move, error) {
@@ -184,24 +169,25 @@ func expandCoordRange(start Coord, end Coord) []Coord {
 	return coords
 }
 
-func parseMoveNode(node sgfNode, boardSize int, fileFormat int) (Move, bool, error) {
+func parseMoveNode(node sgfNode, boardSize int) (Move, bool, error) {
 	if vals, ok := node.Props["B"]; ok && len(vals) > 0 {
-		move, err := parseMove("B", vals[0], boardSize, fileFormat)
+		move, err := parseMove("B", vals[0], boardSize)
 		return move, true, err
 	}
 	if vals, ok := node.Props["W"]; ok && len(vals) > 0 {
-		move, err := parseMove("W", vals[0], boardSize, fileFormat)
+		move, err := parseMove("W", vals[0], boardSize)
 		return move, true, err
 	}
 	return Move{}, false, nil
 }
 
-func parseMove(player string, value string, boardSize int, fileFormat int) (Move, error) {
+func parseMove(player string, value string, boardSize int) (Move, error) {
 	value = strings.TrimSpace(strings.ToLower(value))
 	if value == "" {
 		return Move{Player: player, Coords: nil}, nil
 	}
-	if value == "tt" && fileFormat > 0 && fileFormat < 4 && boardSize <= 19 {
+	// FF[4] still allows FF[3]'s [tt] pass on boards up to 19x19 (as sgfmill does).
+	if value == "tt" && boardSize <= 19 {
 		return Move{Player: player, Coords: nil}, nil
 	}
 	coord, err := parseCoord(value, boardSize)

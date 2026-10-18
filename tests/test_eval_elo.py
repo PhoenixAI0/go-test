@@ -19,24 +19,29 @@ def _load_eval_module():
     return module
 
 
-def test_parse_match_config_player_name(tmp_path):
-    module = _load_eval_module()
-    cfg = tmp_path / "match.cfg"
-    cfg.write_text(
-        """
-players = player1,player2
-player1 = {
-  name = TestModel
-  command = python run.py
-}
-player2 = {
-  name = KataGoBaseline
-  command = /usr/bin/katago gtp
-}
-""".strip(),
-        encoding="utf-8",
-    )
-    assert module._parse_match_config_player_name(str(cfg)) == "TestModel"
+def test_create_match_config_round_trips_and_quotes_paths(tmp_path, monkeypatch):
+    import shlex
+
+    _load_eval_module()  # Puts scripts/ on sys.path.
+    from create_match_config import create_match_config
+    from go_rl.gtp_match import MatchConfig
+
+    katago_dir = tmp_path / "kata go"
+    output = tmp_path / "match.cfg"
+    monkeypatch.setenv("KATAGO_BIN", str(katago_dir / "katago"))
+    create_match_config(str(output), board_size=19, num_games=4, model_command="engine --x 1",
+                        katago_bin="${KATAGO_BIN}", katago_model=str(katago_dir / "m.bin.gz"),
+                        model_name="TestModel")
+    config = MatchConfig.load(output)
+    assert (config.board_size, config.num_games, config.model.name) == (19, 4, "TestModel")
+    assert config.max_moves == 3 * 19 * 19
+    command = shlex.split(config.katago.command)
+    assert command[:2] == [str(katago_dir / "katago"), "gtp"]
+    assert command[command.index("-config") + 1].endswith("config/katago_gtp_eval.cfg")
+
+    monkeypatch.delenv("KATAGO_BIN")
+    with pytest.raises(ValueError, match="Unresolved environment variable"):
+        create_match_config(str(output), 9, 1, "engine", "${KATAGO_BIN}", "model")
 
 
 def test_summarize_match_results(tmp_path):

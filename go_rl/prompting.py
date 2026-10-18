@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from typing import Protocol, Sequence
 
@@ -83,10 +82,6 @@ def _parse_matrix_prompt(lines: list[str], size: int) -> BoardState:
     return BoardState.from_matrix(size=size, board=matrix_rows, next_player=to_play)
 
 
-_MOVE_PATTERN = re.compile(r"\b([A-HJ-T])\s*([1-9]|1[0-9])\b", re.IGNORECASE)
-_PASS_PATTERN = re.compile(r"\bPASS\b", re.IGNORECASE)
-
-
 def build_prompt(board: BoardState, player: str | None = None) -> str:
     if player is not None:
         normalized = player.strip().upper()
@@ -117,15 +112,3 @@ def build_generation_inputs(
         except TypeError:
             pass
     return tokenizer(prompt, return_tensors="pt")
-
-
-def parse_move(response: str) -> str:
-    """Parse a GTP move or PASS from a model response."""
-    if not response:
-        raise ValueError("Empty response")
-    if _PASS_PATTERN.search(response):
-        return "PASS"
-    match = _MOVE_PATTERN.search(response)
-    if match:
-        return f"{match.group(1).upper()}{match.group(2)}"
-    raise ValueError(f"Could not parse move from response: {response!r}")
