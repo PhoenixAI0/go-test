@@ -19,7 +19,7 @@ then “Redeem reset — Check availability”. The availability picker displaye
 No reset was chosen or redeemed. Exited the picker and closed the preflight
 terminal. A T3 reminder is scheduled for 01:15 Asia/Singapore in this thread.
 
-## Pending execution
+## Historical execution plan (completed below)
 
 Reopen the CLI at the specified time, inspect availability again, choose only
 the October 23 05:01 reset, inspect confirmation before committing, and verify
@@ -64,3 +64,6 @@ Disable/delete the reminder after execution so it cannot recur.
 Outcome: the requested specific reset was available and correctly selected,
 but the Codex service declined redemption twice. There is no success confirmation
 and no consumed reset to report. The schedule has been deleted.
+
+Final read-only verification at 03:08–03:09 Singapore: the scheduler again returned
+`tasks: []`. No TUI was reopened and no further redemption was attempted.

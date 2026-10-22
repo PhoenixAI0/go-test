@@ -77,61 +77,70 @@ research time rather than count the inactive interval, continue useful research
 and bounded experiments through approximately **03:20 Singapore** if permitted.
 The reset side-task authorization still ends around 02:00; do not extend it.
 
-## Active state at 02:44, October 23
+## Bounded research round completed, 03:30 October 23
 
-The reset schedule is deleted and its absence was verified. Two authorized TUI
-attempts selected only the October 23 05:01 reset; Codex declined both because
-usage did not need resetting. All three remained. Zero consumed; do not retry.
+Branch: `autoresearch/go-19x19-20261022`. Source commits through `5723396`;
+final documentation/journal commit follows. All bounded GPU jobs are finished.
+Work ran from 23:15 to 03:30 with a usage-limit interruption at 00:08–01:15:
+about three hours of active research, implementation and experiments excluding
+that pause. Long training and larger tournaments remain for the user.
 
-The compact text v2 beam-4 development winner lost both full games: Black
-W+40.5 after 70 plies (34/35 model turns were PASS), White B+337.5 after 509.
-Both completed by two passes without caps or forfeits. The old train sets had
-no empty boards and validation began at move 18. Greedy also passed from empty.
+Primary report: `PLAN/EXPERIMENT_RESULTS_2026.md`. Research notes cover 38 distinct
+primary papers. The journal through run 40 records commands, inputs, snapshots,
+metrics and negative results. Generated artifacts remain ignored/local.
 
-Four 120-update compact/D4 arms on the new 512-state opening-inclusive v4 source
-are finished: teacher visits 8/64 crossed with learning rates 1e-4/5e-4, seed
-3407. Source has eight empty starts, 56 other positions at moves 1–20, and 448
-later positions, from 112 training games. All held-out game/D4 exclusions pass.
-Commands and source snapshots: logs/research/teacher_budget_queue.json and
-logs/research/source_snapshots/. Outputs: text_v4_visits{8,64}_lr{0.0001,0.0005}_s3407.
-Best NLLs: 1.586295, 1.608759, 1.620971, 1.712080, respectively. Do not rank their
-Go quality by those losses; validation labels were generated at eight visits.
+The development-selected recipe is teacher64/lr1e-4, compact text, D4×8,
+120 updates, beam4, seed3407. Its fixed repeat uses seed3408. The chosen checkpoint
+is `outputs/research/text_v4_visits64_lr0.0001_s3407/best`. Pilot recipe:
+`config/policy_19x19_qwen06_pilot.yaml`. Larger unvalidated budget:
+`config/policy_19x19_qwen06.yaml`; see `docs/EXPERIMENT_PROTOCOL.md`.
 
-GPU is now reserved for logs/research/run_refresh_queue.py, session 25384,
-launched around 02:40. It warms the old compact-v2 checkpoint on equal 256-row
-control/mix datasets under data/refresh_ablation_v2. Both share 192 expert rows;
-the remaining 64 expert or learner rows are exactly matched by six game phases.
-Both have five empty states. Learner labels come from 99 states exported from
-the two actual failed games and queried at 64 visits. Exact training commands
-are logs/research/refresh_queue_commands.json (120 steps, D4×8, lr1e-4, seed3407,
-eval every60, generation8). v1 prepared datasets were never trained.
+The frozen final test was released once: 123 positions/32 games, b18 at 32 visits,
+all beam4, fixed selected/repeat/old/base plus controls. There were 891 queries;
+the measured evaluation took 522.58 seconds. Selected minus base was
++4.968 [3.410, 6.833]; minus old +0.109 [−1.182, 1.398]; minus uniform
++1.150 [0.031, 2.317]. Repeat minus uniform was +0.580 [−0.655, 1.923].
+All predictions were legal. These are engine estimates, not Elo. No model choice
+was made using final outcomes. Raw report:
+`outputs/research/final_quality_b18_frozen123_s3407.json`; paired statistics:
+`outputs/research/final_quality_contrasts.json`; standalone figures:
+`outputs/research/final_quality_frozen123.png` and `.svg`.
 
-After refresh, give rl_research the GPU for prepared
-logs/research/run_v4_quality.py: all six new beam-4 text candidates, old-v2 beam4,
-categorical D4=1/8, static frequencies, same32 valid development states, b18@32.
-It also runs four opening probes. White passing after Black passes from empty
-wins W+7.5, so do not mislabel all opening passes as failures. Selection protocol
-is frozen in logs/research/v4_selection_protocol.json: all legal + empty Black
-non-PASS, then highest equal-game score advantage. No eligible arm means no
-promotion claim. Test the choice in two color-swapped complete games.
+An independent numerical audit reproduced 22 summaries; 17 statistical-helper
+tests passed. The repeat fingerprint audit excludes only the report-only
+`training_state.pt` extra; all 22 frozen model/tokenizer/metadata hashes match.
+Raw artifacts were unchanged. The b18 reference is selected and scored by the
+same engine; independence means the evaluator differs from the b6 teacher.
 
-Next: optionally repeat the chosen training seed; freeze model/decoder choice,
-then evaluate the untouched 123-position /32-game target final set once. Also run
-actual two-step train_19x19 smoke with teacher_v4_visits64 and val_v3, plus seeded
-PPO (four actual sampled continuations, at most128 new plies each) from prepared
-logs/research/seeded_ppo_v4_command.json. Caps remain bootstraps, never outcomes.
-Defer all long training to the user. Continue useful work through at least03:20.
+The selected model lost both full games: Black W+368.5 after 530 plies, White
+B+336.5 after 511. Model passes were 11/265 and 11/255, first pass at plies
+489/474. Participation improved over the old empty-Black pass collapse;
+playing-strength improvement is unproven. Old v2 also lost both games. No finite
+Elo is reported. Another 128 learner states were exported for future training
+only; no new labels or training used them.
 
-Nine real KataGo1.18.2 integration tests passed in10.25 seconds. The Benson
-fixture produces formal B+353.5 vs raw-board B+347.5, confirming the separate
-score conventions. Latest CPU suite before final metadata edits:737 passed.
-Final full CPU suite, Ruff, and diff checks remain after all code changes.
+Seeded categorical PPO produced four 128-ply continuations, 512 legal actions,
+one PASS and zero endings. There were 128 optimizer steps in 390.61 seconds,
+approximate KL 0.03454 and clip fraction 0.28516. Caps use critic bootstraps;
+316 captures reopened space. There was no observed terminal-reward learning.
+Learner refresh and categorical inference D4 also failed their bounded quality
+comparisons.
 
-New text checkpoints now persist validated board size/rules/komi/encoding; GTP
-restores them. Spatial heads reject incompatible input encodings. Existing
-compact full-game commands passed explicit objective/encoding and are unaffected.
+Final verification: 778 CPU tests in 16.00 seconds, nine real KataGo tests in
+10.25 seconds, Go race tests passed, Ruff F/E9 and diff checks clean. A late
+input-role guard rejects marked final-test rows for checkpoint selection;
+generic final evaluation remains supported. Earlier valid training inputs and
+frozen weights are unaffected. Periodic/final checkpoints contain optimizer/RNG
+state; `best` supports inference or warm starts. Use `--init-checkpoint` for a
+new training budget.
 
-Scientific results: PLAN/EXPERIMENT_RESULTS_2026.md; journal through run30.
-Earlier32-position quality reports each contained one post-terminal state;
-use31-position post-hoc audits or later preselection-filtered32-position reports.
-Final target SHA: b2cc7402fb88bbb1595323e884854a2e21f99892c9a5a00e4db10375f6486070.
+Next research round: acquire many more independent games and reserve a NEW
+untouched final set. Audit opening/endgame coverage; match teacher budget,
+learning rate, data and decoder compute; repeat seeds; evaluate completed,
+color-balanced games. Measure natural terminal-reward coverage before expensive
+RL variant sweeps. Do not tune on this final sample again.
+
+Reset side task is complete: schedule deleted and verified empty at 03:09;
+zero banked resets consumed. Authorized TUI attempts selected only October23
+05:01, and the service declined twice. No later reset was selected. Do not retry.
+`PLAN/USAGE_RESET_2026-10-23.md` is the record.

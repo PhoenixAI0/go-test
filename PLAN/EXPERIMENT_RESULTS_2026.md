@@ -17,7 +17,10 @@ The first encouraging move-quality result did not establish a robust gain
 across training seeds. Lower imitation loss also failed to predict better moves.
 The practical outcome is a much more reliable experiment system, measured
 interface and efficiency improvements, and explicit evidence about which
-quality hypotheses still need larger runs. Long training is left to the user.
+quality hypotheses still need larger runs. Long training is left to the user. The one-time final
+comparison found +4.97 estimated points over base Qwen but only +0.11 over the
+previous checkpoint, with that latter interval crossing zero. Both selected
+full games were losses. There is no demonstrated large playing-strength gain.
 
 ## Research translated into code
 
@@ -76,7 +79,7 @@ game. Original artifacts remain immutable. Future builders reject these states.
 The corrected validation file is `data/teacher_19x19_val_v3.jsonl`: 63 positions,
 the same 16 development games and unchanged retained labels, SHA256
 `e367af48c3c967d4318c7a586e9d715501acff4ecf5ef73ee93fcfaedf8f7b62`.
-It is not a new independent holdout. The untouched final target has 123 positions
+It is not a new independent holdout. The target frozen until final evaluation has 123 positions
 from all 32 frozen games after five terminal-history exclusions, SHA256
 `b2cc7402fb88bbb1595323e884854a2e21f99892c9a5a00e4db10375f6486070`.
 No replacements were selected based on labels or model outputs.
@@ -187,7 +190,7 @@ had missed an essential part of the actual task. SGFs, scores, pass statistics,
 and collection-time checkpoint fingerprints are retained under
 `outputs/research/text_fullgames_compact_v2_beam4/`.
 
-The next controlled source therefore contains 512 states from 112 training
+The next controlled source contained 512 states from 112 training
 games: eight real empty starts, 56 other positions at moves 1–20, and 448
 later positions. It preserves all held-out game and D4-state exclusions. The
 same states receive b6 labels at eight and 64 visits, followed by four equal
@@ -205,6 +208,87 @@ concentration remains a limitation: the learner data comes from only two games.
 The immutable v2 manifests document selection and hashes; v1 was prepared but
 not trained. This implements a small DAgger-inspired data-distribution test,
 not a complete reproduction or proof of on-policy distillation gains.
+
+All six runs completed. Each of the four base-initialized arms selected its
+final step 120 by validation loss. Both refresh arms instead retained their
+initial weights as best by that loss. Before any Go-quality queries, the
+protocol was amended to compare **both refresh final checkpoints**, preserving
+equal update budgets. Nothing was selected using final-test outcomes.
+
+The independent b18 evaluation reused the same 32 valid development states:
+
+| Training arm, all beam 4 | Best validation NLL | Score vs uniform, 95% game interval |
+|---|---:|---:|
+| Teacher 8 visits, lr 1e-4 | 1.5863 | +1.11 [−1.58, 3.87] |
+| Teacher 64 visits, lr 1e-4 | 1.6088 | +4.54 [1.34, 8.98] |
+| Teacher 8 visits, lr 5e-4 | 1.6210 | +3.64 [1.05, 6.78] |
+| Teacher 64 visits, lr 5e-4 | 1.7121 | +1.71 [−0.53, 4.22] |
+| Expert-only refresh, final 120 | 1.5669 (initial) | +3.00 [1.53, 4.72] |
+| Learner-state refresh, final 120 | 1.5669 (initial) | +1.32 [−0.74, 3.22] |
+| Previous compact-v2 model | 1.5669 on corrected validation | +4.01 [1.77, 6.63] |
+
+The selected 64-visit/lr1e-4 model plays `Q16` from empty. All six new candidates
+made legal opening probes and avoided the old empty-Black PASS. These include
+known training states and demonstrate coverage, not held-out generalization.
+White can correctly pass to win immediately after Black passes from empty;
+the selected model misses that opportunity, choosing `R17` instead. It remains
+a weak policy despite fixing the most obvious opening symptom.
+
+Selected minus previous model is only **+0.52 [−1.02, 2.57]** on paired positions,
+so no midgame improvement over the previous model is established. Learner
+refresh minus the phase-matched control is **−1.69 [−3.78, −0.06]** in this
+one-seed pilot. Optional categorical D4 inference changed +0.30 versus uniform
+to −1.73; its paired change is −2.03 [−6.04, 1.22], costing about five times
+the measured inference duration. Neither refresh nor this D4 ensemble earns a
+quality recommendation from these measurements. Training D4 and inference D4
+are distinct experiments.
+
+Evidence: `outputs/research/move_quality_v4_b18_beam4_d4_valid32_s3407.json`,
+`opening_probe_v4_beam4_s3407.json`, and `v4_selection_and_contrasts.json`.
+The teacher-budget effect depends on learning rate in this small study;
+64 visits is not shown universally superior. Repeated development selection,
+one seed per new arm, and approximate engine values limit these intervals.
+
+## Selected v4 model: completed games remain two losses
+
+The frozen 64-visit/lr1e-4, seed 3407 checkpoint at step 120 played two
+from-empty 19×19 games with beam 4, swapping colors against KataGo b6 at
+eight visits. Both ended by two passes. There were no caps, forfeits, void
+results, or scoring failures; the 1,083-ply cap would have produced Void.
+
+| Model color | Official result | Total plies | Model passes / turns | First model pass |
+|---|---|---:|---:|---:|
+| Black | W+368.5 | 530 | 11 / 265 | Ply 489 |
+| White | B+336.5 | 511 | 11 / 255 | Ply 474 |
+
+The summary is **zero wins and two losses**, with Elo left undefined. The
+model now participates from the opening: the previous compact-v2 model
+passed on 34/35 Black turns starting at ply 1, while this candidate first
+passed at ply 489. This change does **not** establish stronger full-game play.
+Both models lost both games, and the new Black loss was larger. Early-pass
+losing margins are not a useful substitute for winning or strategic competence.
+The model remains very weak against this opponent.
+
+Independent CPU raw-area counting matched both official margins. The Black
+game ended with zero Black stones, 262 White stones and 99 White territory.
+The White game ended with 254 Black stones, 98 Black territory, eight White
+stones and one neutral point. This agreement in these games does not erase
+the legitimate raw-area/Benson difference documented below; the diagnostic
+never replaced the referee result.
+
+Evidence, complete SGFs, logs, collection-time checkpoint fingerprints and
+source snapshots are in
+`outputs/research/text_fullgames_v4_v64_lr0.0001_beam4/`, including
+`summary.json`, `behavior_audit.json` and `raw_area_audit.json`.
+
+A CPU-only export retained 128 learner pre-action states, 64 per game, from
+520 eligible learner turns. It found no D4 duplicates or overlaps with the
+validation and frozen final-test states. The training-only file
+`data/text_learner_v4_v64_lr0.0001_beam4_source_v1.jsonl` has SHA256
+`6da6bb6e3dd45ffdebaf4323a0a98c896c9a1a7ed19f44bd72bb6769e64655b8`.
+These are unlabeled learner states with behavior/checkpoint provenance for
+future controlled refresh. No teacher queries or training used this export,
+and it does not alter the frozen comparison or current quality claims.
 
 ## Correctness, efficiency and RL
 
@@ -229,6 +313,31 @@ KL .00638 and clip fraction .0625. It capped before termination; this is plumbin
 evidence, not a reward-learning or strength result. Seeded late-game continuations
 are explicitly distinguished from games starting empty.
 
+A second bounded PPO experiment sampled four genuine continuations from training
+positions at plies 283, 341, 302 and 314, with a limit of 128 new model moves each.
+All four capped. Replay independently verified all 512 actions under full-history
+positional superko, alternating colors, exact seed provenance, and no missed
+two-pass ending. There was **one pass in 512 moves**. Captures reopened space:
+316 stones were captured, 259 in the second halves of the trajectories; ending
+empty points were 89, 33, 30 and 64. Late move number did not ensure closeness to
+termination. These trajectories have null outcomes and supply bootstrapped
+critic targets, not verified terminal win/loss learning. This uses the weaker
+categorical checkpoint and does not update the selected text model. The update
+finished in 390.61 seconds (398.29 seconds for the process), optimizing all 512
+moves through 128 minibatches with finite gradients. Approximate KL was 0.03454
+and clip fraction 0.28516. The KL guard limits additional epochs; this one-epoch
+run completed its entire first pass, as configured. These drift diagnostics
+provide another reason not to treat a finite loss as a useful policy improvement.
+
+For a future reward-coverage experiment, preregister training-only seed strata
+by legal-action count, board occupancy and prior-pass state, then measure the
+fraction of **naturally sampled** completions at a fixed budget. Preserve an
+empty-board evaluation distribution. Do not manufacture terminal rewards by
+forcing passes, search-scoring caps, or discarding failed groups without counting
+their compute. The current min-move curriculum alone did not solve this problem.
+Evidence: `outputs/research/policy_seeded_terminal_v4_s3407/episodes.jsonl` and
+`episode_replay_diagnostic.json`.
+
 For KataGo 1.18.2, genuinely finished area games with `friendlyPassOk=false` use
 deterministic terminal scoring, including Benson pass-alive territory. Other
 GTP situations can invoke anticipated-score estimates. Analysis `scoreLead` and
@@ -246,8 +355,11 @@ why the two score conventions must remain separate in the implementation.
 Periodic resume checkpoints bind weights, tokenizer, historical best model, optimizer,
 scheduler, RNG state, prepared-data hashes and evaluation cadence. Real tiny
 Qwen tests verify bit-exact CPU continuation for both trainers with and without
-D4. The `best` and `final` inference directories alone do not contain optimizer
-or RNG state. Exact MPS/CUDA numerical equivalence across machines is not claimed.
+D4. Periodic checkpoints and `final` contain optimizer/RNG state and the
+preserved best snapshot; `best` is for inference or a new warm start. Resuming
+an already finished schedule does not extend it: use a new run with
+`--init-checkpoint` for a different budget. Exact MPS/CUDA numerical equivalence
+across machines is not claimed.
 
 ## Reproduce and continue
 
@@ -260,8 +372,124 @@ splits and outcome conventions fixed when comparing candidates.
 
 The larger experiments should prioritize more independent games, a stronger
 teacher budget, repeated seeds, completed color-balanced matches, and learner-
-visited states with expert replay. Preserve the untouched final split until
+visited states with expert replay. Reserve a new untouched final split before the next round, and keep it unused until
 choosing the development winner. Promote by independent quality and games,
 never merely by syntax, token count or training loss.
 
-Further bounded experiment results are appended below as they complete.
+## One-time frozen final evaluation
+
+After the development choice and fixed seed3408 repeat were recorded, the
+123-position/32-game final set was released once. All four Qwen arms used
+nonthinking constrained beam 4, with the same position order and independent
+b18 evaluator at a 32-visit cap per root and unique child. The run performed
+123 root and 768 unique-child queries (891 total); the measured evaluation
+phase took 522.58 seconds after input auditing. All predictions were legal;
+all paired comparisons retain every position and game.
+
+| Fixed arm | Estimated score advantage vs uniform | 95% game interval |
+|---|---:|---:|
+| Selected teacher64/lr1e-4, seed3407 | +1.15 | [+0.03, +2.32] |
+| Fixed repeat, seed3408 | +0.58 | [-0.65, +1.92] |
+| Previous compact-v2 | +1.04 | [-0.40, +2.67] |
+| Base Qwen3-0.6B | -3.82 | [-5.07, -2.66] |
+| Training-only coordinate frequency | -1.28 | [-4.24, +0.59] |
+| Fresh evaluator-selected move | +7.30 | [+5.54, +9.25] |
+
+The primary paired contrasts are selected minus previous **+0.109
+[−1.182, 1.398]**, selected minus base **+4.968 [3.410, 6.833]**, and selected
+minus uniform **+1.150 [0.031, 2.317]**. Training improved this diagnostic over
+base Qwen, but the new selected recipe does **not** demonstrate a gain over the
+previous checkpoint. Its margin over uniform is narrow and does not repeat
+as a positive score interval for seed3408. Selected minus the static frequency
+control is **+2.430 [−0.066, 5.923]**; superiority to that control is also
+inconclusive on this final sample. Repeat minus selected is **−0.570
+[−1.995, 0.830]**. Neither seed is promoted using final results.
+
+As secondary engine diagnostics, estimated win-probability differences versus
+uniform were +4.51 percentage points [0.83, 8.59] for selected and +3.55
+[0.64, 6.63] for the repeat. These are **not measured game win rates** and do
+not override the two full-game losses. The reference action remains well ahead
+on estimated score. The same b18 engine both chooses that reference and scores
+its child, so it is an internal search reference, not independent ground truth.
+Evaluator independence here means separate from the b6 training teacher. All intervals use 5,000 paired, equal-game bootstrap draws;
+they are pointwise, not adjusted for multiple contrasts, and exclude engine
+approximation error and general training-seed uncertainty.
+
+The release manifest binds dataset, protocol, chosen/repeat model files, source
+snapshot and development selection hashes. The independent statistical audit
+reproduced all 22 score/winrate summaries with a second NumPy implementation.
+A schema check initially compared all reported checkpoint files with a
+model-only manifest: the repeat's `final` directory additionally contains
+`training_state.pt`. The summary now projects out only that known optimizer/RNG
+file, records its hash, and still rejects changed, missing or extra model files.
+All 22 released repeat model/tokenizer/metadata hashes match; the raw report and
+release manifest were not changed. Seventeen CPU checks cover the summary.
+
+Evidence: `outputs/research/final_quality_b18_frozen123_s3407.json`,
+`outputs/research/final_quality_contrasts.json`,
+`logs/research/final_quality_numerical_audit.json`, and the frozen protocol/source
+manifest under `logs/research/`. Standalone figures are
+`outputs/research/final_quality_frozen123.png` and `.svg`.
+
+## Decisions for the next larger run
+
+1. Keep complete histories, fixed rules/komi, whole-game/D4 isolation and legal
+   decoding. These fix demonstrated correctness and interface failures.
+2. Use compact text as the measured starting interface. Grid had similar NLL
+   at about 1.7× the local training time. Preserve beam 4 as a measured inference
+   option; it helped one checkpoint and hurt another. Raw text legality remains
+   too unreliable to remove the constraint.
+3. Scale independent source games and audit opening/endgame coverage before
+   scaling updates. The selected D4/teacher64 recipe bundles several choices;
+   this study does not isolate a universal D4 benefit or prove 64 visits always
+   beats eight. Keep teacher-budget/LR comparisons matched and repeat seeds.
+4. Keep categorical soft-target learning as an explicit alternative, with
+   matched target-source controls. Its lower imitation loss did not establish
+   stronger play. Ownership/score auxiliary heads remain unimplemented hypotheses.
+5. Measure natural terminal-reward coverage before spending a large budget on
+   GRPO/PPO variants. The sampled late-game test produced no outcomes. Consider
+   broader expert replay and a preregistered ending-state curriculum, evaluating
+   the eventual policy in full games from empty.
+6. Treat learner refresh and D4 inference as hypotheses to revisit, not adopted
+   improvements: both failed their bounded development comparisons. Use more
+   learner games and fixed budgets before drawing broad negative conclusions.
+
+The final evaluation above is a one-time report. Any subsequent optimization round
+needs a new untouched final sample, with promotion based on repeated seeds and
+color-balanced completed games against a fixed opponent ladder. Do not turn
+this small study's estimated score differences into Elo claims.
+
+## Verification and artifact status
+
+The final CPU suite passed **778 tests** in 16.00 seconds. All **nine real
+KataGo integration tests** passed in 10.25 seconds, including the terminal
+scoring fixture. The Go parser passed `go test -race ./...`; Ruff's fatal/error
+checks and `git diff --check` passed. These establish tested contracts, not
+playing strength. Logs are `logs/research/cpu_final_20261023_role_guard.log` and
+`logs/research/katago_integration_20261023.log`.
+
+The last review closed another leakage boundary: recipe training inputs now
+require explicit train/validation roles, and both direct trainers reject
+marked final-test rows before loading a model. Generic standalone evaluation
+still accepts test data. Twelve new regressions cover the boundary and legacy
+compatibility. The completed frozen evaluation used the earlier saved source
+snapshot and fixed checkpoint hashes; this input guard changes neither those
+weights nor the previously valid training inputs. The fix is commit `5723396`.
+
+An actual Qwen/MPS smoke through `train_19x19.py` completed two updates with
+8 training and 4 validation positions in 21.20 seconds. The selected 120-update
+pilot is separately exposed in `config/policy_19x19_qwen06_pilot.yaml`.
+Documentation checks covered 32 command flag sets, 19 links/anchors, and both
+pilot/long-recipe dry-runs. Direct runners use a single model device; the legacy
+multi-GPU wrappers are a separate path.
+
+A fixed repeat of the selected training recipe with seed 3408 completed all
+120 updates in 245.25 seconds. Final/best completion NLL was 1.710322 versus
+1.608759 for seed 3407. Raw legality on eight development states was 5/8, while
+constrained legality was 8/8. This repeat's final step was chosen in the protocol
+before any final-test queries; the final set must not choose between seeds.
+
+Source changes and the experiment journal are versioned. Large checkpoints,
+JSONL datasets, engine networks, source snapshots and per-position reports remain
+in ignored local paths. Transfer those artifacts and verify recorded hashes
+when reproducing this exact study on another machine.

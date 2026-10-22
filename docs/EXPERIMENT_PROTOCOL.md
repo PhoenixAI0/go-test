@@ -15,6 +15,7 @@ same GPU. Replace the engine paths with installed files:
 export KATAGO_BIN=/absolute/path/to/katago
 export GO_TEACHER_MODEL=/absolute/path/to/teacher-network.bin.gz
 export GO_EVAL_MODEL=/absolute/path/to/independent-evaluator-network.bin.gz
+export KATAGO_MODEL="$GO_TEACHER_MODEL"
 export GO_REVISION=c1899de289a04d12100db370d81485cdf75e47ca
 mkdir -p logs/protocol_v1
 git rev-parse HEAD > logs/protocol_v1/commit.txt
@@ -27,6 +28,14 @@ The trainer and teacher manifests record input/model/config hashes, resolved
 arguments, seed, and engine version. Preserve `uv.lock`, source manifests,
 checkpoints, stage logs, and reports. A fixed seed is not a promise of bitwise
 reproducibility across GPU types or driver/library versions.
+
+For a larger NVIDIA machine, complete the CUDA setup checks and run the bounded
+smoke with `--device cuda` before a longer job. The direct runners place the model
+on one device; they do not implement distributed training. Size `batch_size` and
+`gradient_accumulation` before starting: their product is the effective batch size.
+Keep it fixed for a matched throughput comparison and record any changed settings.
+An exact resume must retain the original device type and training contract;
+moving an experiment from MPS to CUDA requires a fresh run or `--init-checkpoint`.
 
 ## 1. Freeze development and final-test sources before model selection
 
@@ -82,6 +91,15 @@ uv run --locked python scripts/build_teacher_dataset.py \
   --max-visits 64 --prior-mix 0.5 --seed 3407 \
   --relabel-rules koPOSITIONALscoreAREAtaxNONEsui0 --relabel-komi 7.5 \
   --katago-model "$GO_TEACHER_MODEL" --katago-config config/katago_analysis_train.cfg
+uv run --locked python - <<'PY'
+from go_rl.experiment_utils import read_records
+from scripts.prepare_refresh_ablation import validate_holdout_roles
+
+validate_holdout_roles(
+    read_records("data/protocol_v1/validation.jsonl"),
+    read_records("data/protocol_v1/final_target.jsonl"),
+)
+PY
 uv run --locked python scripts/prepare_opening_budget.py \
   --dataset data/protocol_v1/sft_19x19.jsonl \
   --background data/protocol_v1/sft_19x19.jsonl \
@@ -97,6 +115,8 @@ Adapt the sampling design before scaling; do not assume that simply setting
 `min_move=0` supplies enough openings. Inspect its manifest's actual quotas,
 phase counts, per-game counts and exclusions. If empty starts are absent, revise
 the source sampling before training. A forced `PASS` policy is legal but useless.
+The explicit validation/final check is required even if learner refresh is
+skipped: disjoint game IDs alone do not exclude shared opening states.
 
 Label **the same frozen states** at two teacher budgets:
 
@@ -146,7 +166,7 @@ for visits in 8 64; do
       --encoding compact --symmetries 8 --steps 120 --batch-size 4 \
       --gradient-accumulation 1 --learning-rate "$lr" --seed 3407 \
       --lora-rank 16 --lora-alpha 32 --max-seq-length 1024 \
-      --eval-every 20 --checkpoint-every 60 --generation-positions 8 \
+      --eval-every 60 --checkpoint-every 60 --generation-positions 8 \
       --output-dir "outputs/protocol_v1/t${visits}_lr${lr}_s3407"
   done
 done
@@ -268,6 +288,12 @@ Set the larger source/label paths, representation, augmentation, batch, schedule
 and teacher budget explicitly. Freezing more labels requires enough independent
 games and measured phase coverage. Do not repeatedly cycle 512 positions and
 call that scaling the data. The YAML's 32,768/2,000 defaults remain unvalidated.
+This larger recipe keeps D4 at 1 and greedy decoding unless edited; it is not
+the [selected short pilot](../config/policy_19x19_qwen06_pilot.yaml), which uses
+D4 at 8 and evaluation beam width 4. Decide those settings from development data.
+The recipe's single `katago.model` value uses `KATAGO_MODEL` for both generated
+labels and optional evaluation. For a separate evaluation network, reuse frozen
+labels and set `KATAGO_MODEL="$GO_EVAL_MODEL"` before launching `--evaluate`.
 Run the same command without `--dry-run` only when ready for the long job.
 Use [the documented resume command](../README.md#direct-training-recipe) for an
 interrupted identical schedule; a changed objective or budget uses
@@ -291,8 +317,8 @@ uv run --locked python scripts/eval_move_quality.py \
 ```
 
 Repeat `--train-data` for every source actually used by the selected model,
-including pretraining adapters and learner refresh. The final target has no
-teacher labels; this evaluator queries reference/selected moves directly. Also
+including datasets used by warm-start adapters and learner refresh. The final
+target has no teacher labels; this evaluator queries reference/selected moves directly. Also
 run a new, predeclared paired full-game match with the frozen policy/opponent;
 the held-out-position report and complete-game evidence answer different questions.
 Do not tune after seeing either final result. Any subsequent iteration needs a

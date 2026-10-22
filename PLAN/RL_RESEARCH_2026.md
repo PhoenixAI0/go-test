@@ -4,7 +4,7 @@
 
 Prioritize a reliable 19×19 learning problem, strong data, and useful gradient per unit compute. Optimizer variants cannot compensate for incomplete state, an invalid action interface, mislabeled terminal outcomes, or the absence of rewarding trajectories. Start Qwen's 0.6B checkpoint with compact observations and measurable legal action learning; compare a categorical 362-action policy with coordinate-text generation. Use KataGo as an explicitly identified teacher and value estimator. Measure actual finished games separately from teacher agreement and estimated move quality.
 
-The most promising architectural experiment is a shared Qwen backbone with a legal-action policy head and a value/action-value head. This retains the chosen model while eliminating most language decoding overhead. Its promise is an inference from the finite action structure and the research below, not an already demonstrated playing-strength gain. Long textual reasoning should earn its inference cost in a controlled experiment rather than be assumed useful.
+The initial architectural hypothesis was a shared Qwen backbone with a legal-action policy head and a value/action-value head. This retains the chosen model while eliminating most language decoding overhead. Its promise is an inference from the finite action structure and the research below, not an already demonstrated playing-strength gain. Long textual reasoning should earn its inference cost in a controlled experiment rather than be assumed useful. The subsequent bounded experiments below favored constrained coordinate-text distillation over the tested categorical heads; the categorical path remains useful for efficient, correctly specified trajectory RL, not the demonstrated strength winner.
 
 ## Reading record: primary sources and actual sections inspected
 
@@ -343,3 +343,56 @@ The next teacher-budget/learning-rate comparison therefore uses a newly frozen v
 The SGF bridge exported **99 learner pre-action states**: all 35 Black-game states and a game-balanced cap of 64 White-game states, selected from 289 eligible states after D4 deduplication and exclusion against the validation and untouched final-test corpora. No overlaps were found. `data/text_learner_refresh_compact_v2_beam4_source_v1.jsonl` has SHA256 `3c7dcfbbe7c7c58935f047efff8b8d5e1edab41c585b8b4c57f22a45a525d6e2`. Learner actions, game results, and checkpoint observations remain provenance, not expert response labels. Fresh teacher annotation can now compare learner-state coverage against a static-source control at the same teacher budget.
 
 The endpoint audit also closed a remaining legacy-RL hole: root-continuation rollouts configured to stop after two passes now reject already-ended histories, and scalar area-scoring reward contexts reject them before engine queries. `BoardState.has_two_pass_history()` tracks the entire known history, including an identifiable pass before a snapshot; checking only the current trailing passes would miss a cleanup move after the endpoint. Territory scoring is not indiscriminately declared finished by this area-specific scalar guard, because its phase semantics can differ. These checks establish input correctness, not an improvement in learned play.
+
+The categorical collector now also rejects unsupported terminal semantics **before** model or referee work. It is deliberately restricted to area scoring with no tax, button, handicap bonus, or friendly-pass shortcut. Two local passes are not a sufficient terminal-state representation for territory-scoring encore phases. The active positional-area experiments satisfy this restriction; they are unchanged. Four regression cases cover territory rules, named Chinese defaults with friendly passing/handicap semantics, button rules, and explicitly enabled friendly passing. The rollout/seed/runner focused suite passed 32 tests after this guard.
+
+### Predeclared bounded comparisons after opening coverage repair
+
+The four v4 models cross teacher search at 8 or 64 visits with learning rates `1e-4` or `5e-4`. They use the same 512 original training positions, D4 augmentation, and 120 optimizer updates. All four selected NLL checkpoints are the final step 120. Teacher responses agree on only 262/512 positions (51.2%); their searched-label supervision therefore differs materially despite the shared source. Validation NLL uses the earlier 8-visit labels and can favor imitation of that budget. The independent b18@32 child-position comparison is the principal development quality diagnostic.
+
+The separate refresh experiment uses the same old compact-v2 warm start and 120 updates on 256 examples per arm: 192 shared expert states plus either 64 learner-visited states or 64 expert controls matched by move-number bin. Both arms include five empty-board rows. Its expert-control NLL-best checkpoint was the unchanged initialization. Before any new quality inference, the frozen protocol was amended to compare **both final step-120 checkpoints**, preserving equal update budgets. The original protocol, amendment timestamp, command hashes, and source snapshot are retained under `logs/research/`. This amendment uses training diagnostics to preserve the causal comparison; it does not select checkpoints by later Go-quality outcomes.
+
+The next 32-position evaluation uses the exact same valid position IDs as the earlier beam comparison, fixed beam width four, the same teacher objective and b18@32 budget, plus the categorical model with one/eight D4 orientations and fitted response-frequency controls. Selection among the six new text candidates requires legal outputs and a non-pass move for Black on the empty-board probe, then ranks equal-game mean score difference from uniform. If no candidate meets that opening constraint, there is no promotion claim. The probe states are known task-coverage checks, not held-out generalization evidence; the selected model still needs two completed from-empty games. The final test remains untouched at this stage.
+
+### Measured v4 budget, refresh, and D4 results
+
+The fixed evaluation completed in 297.91 seconds with 32 root queries and 269 unique child queries, all at b18/32 visits. Its 32 position IDs exactly match the previous valid beam evaluation. Every prediction was legal. Equal-game mean score differences from the shared seeded uniform baseline were:
+
+| Candidate, fixed beam 4 unless categorical | Estimated points vs uniform | 95% game-cluster interval |
+|---|---:|---:|
+| Teacher 8 visits, LR 1e-4 | +1.109 | [−1.577, 3.870] |
+| Teacher 64 visits, LR 1e-4 | +4.537 | [1.344, 8.985] |
+| Teacher 8 visits, LR 5e-4 | +3.635 | [1.050, 6.784] |
+| Teacher 64 visits, LR 5e-4 | +1.709 | [−0.529, 4.225] |
+| Previous compact v2 | +4.013 | [1.769, 6.625] |
+| Refresh expert control, final step 120 | +3.000 | [1.528, 4.715] |
+| Refresh learner mixture, final step 120 | +1.315 | [−0.744, 3.224] |
+| Bidirectional categorical, direct | +0.299 | [−1.544, 1.928] |
+| Bidirectional categorical, eight-orientation ensemble | −1.729 | [−5.891, 1.848] |
+| Static response frequency, 8-visit labels + D4 | −0.367 | [−2.710, 1.888] |
+| Static response frequency, 64-visit labels + D4 | +0.670 | [−1.601, 3.123] |
+
+Teacher search and learning rate interact in this small sample: 64−8 visits at LR 1e-4 was +3.428 [−0.725, 9.755], but at LR 5e-4 was −1.926 [−6.074, 0.785]. Neither paired interval establishes a teacher-budget gain. The learner-state refresh underperformed its phase-matched control by −1.685 [−3.783, −0.059]. That negative result is limited to one seed, 64 selected learner states from two games, this mixture, and this update budget; it does not refute learner-state aggregation generally. Intervals omit training-seed variation and are not corrected for repeated exploratory comparisons.
+
+D4 probability averaging changed the categorical estimate by −2.028 [−6.037, 1.221]. It consumed 256 forward sequences and 117,718 input tokens versus 32 sequences and 14,690 tokens; measured forward time rose from 6.57 to 41.38 seconds. It therefore provided no supported gain for this checkpoint, despite its larger inference budget. The result does not establish that symmetry ensembles are generally harmful.
+
+All six new text models passed the predeclared legality/non-pass-empty-Black eligibility test. The selected model was the 64-visit/LR1e-4 checkpoint at step 120, with fixed beam four. It exceeded old-v2 by only +0.524 [−1.017, 2.571], so a midgame improvement over the previous model is **not established**. It exceeded the matching static frequency baseline by +3.866 [1.332, 7.019]. Its opening probe moves were Q16 (empty Black), R17 (White after Black passes), D1 (White after Black D4), and D1 (Black after passing then White D4). It now starts playing as Black, but still misses White's immediately winning pass. The learner-refresh model recognized that White pass while still passing as Black in the final probe, illustrating why total pass frequency is not a useful objective.
+
+Selection and paired contrasts were frozen in `outputs/research/v4_selection_and_contrasts.json` before starting two new full games. The raw comparison is `outputs/research/move_quality_v4_b18_beam4_d4_valid32_s3407.json`; its SHA256 is `98a9c3cd69ac6a7335710e0dd9f824eb8a2682720bb29752abfe9ad3962366e0`. These remain development results, with a deliberately untouched final test at selection time.
+
+### Selected v4 model: two completed games, still no strength success
+
+The frozen 64-visit/LR1e-4/beam-4 candidate then played two from-empty 19×19 games against the same b6@8 opponent, with colors swapped. Both ended by two passes, with zero caps, forfeits, or scoring failures:
+
+| Model color | Official result | Plies | Model passes / turns | First model pass |
+|---|---|---:|---:|---:|
+| Black | W+368.5 | 530 | 11 / 265 | Ply 489 |
+| White | B+336.5 | 511 | 11 / 255 | Ply 474 |
+
+The model lost both; the summary correctly leaves Elo undefined for this all-loss sample. The Black game ended with zero Black stones and 262 White stones plus 99 White territory. Independent raw-board scoring agrees with both official margins. Source snapshots, collection-time checkpoint fingerprints, complete SGFs, logs, behavior audits, and scoring diagnostics are preserved in `outputs/research/text_fullgames_v4_v64_lr0.0001_beam4/`.
+
+This confirms a change in participation: the earlier model passed on 34/35 Black turns starting at ply 1, while this candidate first passed at ply 489. It does **not** establish a playing-strength improvement. Both candidates lost both games, and the new Black loss was larger. A smaller losing margin from an early-pass game is itself an unsuitable substitute for win-rate or strategic competence. The selected model remains very weak against this opponent; the development single-move advantage and removal of the opening failure are insufficient to claim the final goal of strong full-size Go play.
+
+A CPU-only export retained 128 new learner pre-action states (64 from each game) from 520 eligible learner turns. No D4 duplicate states or validation/final-test overlaps were found. `data/text_learner_v4_v64_lr0.0001_beam4_source_v1.jsonl` has SHA256 `6da6bb6e3dd45ffdebaf4323a0a98c896c9a1a7ed19f44bd72bb6769e64655b8`. These records are pinned to training and carry behavior/checkpoint provenance; they have no newly queried teacher labels. They are available for a future controlled refresh without altering the already frozen comparison.
+
+Finally, the present full-trajectory PPO implementation trains the categorical policy/value interface, whereas the strongest measured development candidates use coordinate-text distillation. A successful categorical seeded-PPO smoke therefore checks actual trajectory optimization and terminal rewards; it does not demonstrate RL improvement of the selected text model. A future bridge—initializing the categorical backbone from a text-trained adapter and fitting its heads, or implementing text-trajectory policy gradients—requires a separate measured experiment. It is not part of the completed quality claims above.

@@ -29,6 +29,10 @@ For Linux NVIDIA setup, use `./scripts/setup_environment.sh`; the existing x86_6
 and aarch64 package choices, system prerequisites, and CUDA smoke checks are in
 the [legacy setup guide](docs/LEGACY_CURRICULUM.md#run-the-entire-training-curriculum-on-cuda).
 Validate CUDA execution on the target machine before a long run.
+The direct text/categorical runners use one model device; launching them with
+multiple distributed workers is not a supported way to spread one run across GPUs.
+The legacy multi-GPU wrappers are a separate training path. On a larger NVIDIA GPU,
+start with `--device cuda --smoke`, then size the batch before beginning a new run.
 
 Teacher generation and evaluation need a working KataGo binary and network:
 
@@ -42,6 +46,10 @@ export its values using `set -a; source .env; set +a`. The direct recipe reads t
 exported environment; it does not source shell files. Analysis and GTP use separate
 configs in `config/`. Teacher network hashes, engine versions, and visit budgets
 are recorded so a cheap teacher is never confused with a stronger evaluation.
+The direct recipe has one KataGo model path for both label generation and optional
+evaluation. To evaluate against a different network, build labels first, reuse
+them with `--train-data`/`--eval-data`, and set `KATAGO_MODEL` to the evaluation
+network when running `--evaluate`.
 
 ## Prepare real 19×19 positions
 
@@ -95,11 +103,15 @@ their labels; keep the original artifacts unchanged.
 ## Direct training recipe
 
 The [bounded pilot](config/policy_19x19_qwen06_pilot.yaml) exposes the current
-development selection: existing v4 labels at 64 teacher visits, compact text,
+development selection: existing v4 training labels at 64 teacher visits, compact text,
 eight D4 transforms, 120 updates at learning rate 1e-4, and beam width 4 for
 evaluation. It requires the local generated v4/validation-v3 files, or replacement
 paths supplied with `--train-data` and `--eval-data`. This is a reproducible pilot,
 not evidence of an optimal long-run budget or established strategic improvement.
+On another machine, transfer the generated JSONL files and their manifests,
+verify their hashes, and preserve the filenames or supply the replacement paths.
+Validation v3 retains the earlier development labels; the pilot does not regenerate
+them at the training teacher budget.
 
 ```bash
 uv run --locked python scripts/train_19x19.py \
@@ -252,7 +264,7 @@ illegal actions, resignation, and clock failures are explicit outcomes. Capped
 games are `RE[Void]`, excluded from scored win rates/Elo, and reported with cap
 rates. A few games or games against one weak opponent cannot establish a robust
 rating. Add `--evaluate` to the training recipe to run both diagnostics and matches
-automatically; smoke caps remain integration-only outcomes.
+automatically; smoke caps demonstrate integration only.
 
 ## RL and iterative improvement
 
@@ -278,9 +290,14 @@ final-test games unused until model and checkpoint selection are frozen.
 
 ```bash
 uv run --locked pytest -m 'not katago'
-uv run --locked pytest -m katago  # Requires exported KataGo paths.
+export KATAGO_CONFIG="$PWD/config/katago_analysis_train.cfg"
+uv run --locked pytest -m katago  # Also requires KATAGO_BIN and KATAGO_MODEL.
 (cd go_parser && go test ./...)
 ```
+
+The terminal-scoring regression pins KataGo 1.18.2 and uses the separate
+`config/katago_gtp_eval.cfg` (override with `KATAGO_GTP_CONFIG`). Check the test
+summary for unexpected skips when validating a new machine.
 
 Tests include actual tiny Qwen/TRL/PEFT training, legal-action and history checks,
 checkpoint reload/continuation, reward perspectives, dataset isolation, and GTP
