@@ -5,9 +5,10 @@ import logging
 import math
 from dataclasses import asdict
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, Mapping, Any
 
 from go_rl.config import SftConfig, load_config, run_name_for_config
+from go_rl.data_prep import split_dataset_by_game, board_from_example
 from go_rl.reasoning import (
     build_chat_template_kwargs,
     build_final_only_mask,
@@ -55,11 +56,20 @@ class _MaskedSample(TypedDict):
     completion_mask: list[int]
 
 
-def _convert_to_messages(example: _SftExample) -> _ReasoningSample:
+def _convert_to_messages(example: Mapping[str, Any], input_encoding: str = "legacy") -> _ReasoningSample:
     # The chat template supplies the assistant EOS exactly once.
     response = example["response"]
+    prompt = example["prompt"]
+    if input_encoding != "legacy":
+        from go_rl.model_interface import render_position
+
+        if example.get("komi") is None or not example.get("rules"):
+            raise ValueError("Modern SFT inputs require explicit komi and rules metadata; "
+                             "regenerate or relabel the dataset before training.")
+        prompt = render_position(board_from_example(example), input_encoding,
+                                 komi=float(example["komi"]), rules=example["rules"])
     return {
-        "prompt": [{"role": "user", "content": example["prompt"]}],
+        "prompt": [{"role": "user", "content": prompt}],
         "completion": [{"role": "assistant", "content": response}],
         "raw_completion": response,
     }
@@ -110,6 +120,11 @@ def _add_reasoning_completion_mask(
 
 def _safe_perplexity(loss_value: float) -> float:
     return math.exp(min(loss_value, 20.0))
+
+
+def _has_complete_supervision(example: _MaskedSample, max_seq_length: int) -> bool:
+    """Reject partial move/EOS targets instead of teaching truncated answers."""
+    return len(example["input_ids"]) <= max_seq_length and any(example["completion_mask"])
 
 
 def _log_perplexity_history(log_history: list[dict], wandb_enabled: bool) -> None:
@@ -207,13 +222,16 @@ def main() -> None:
     logger.info("Loading dataset from %s", cfg.dataset_path)
     dataset = load_dataset("json", data_files=cfg.dataset_path, split="train")
     if args.smoke:
+        if "split" in dataset.column_names:
+            dataset = dataset.filter(lambda row: row["split"] == "train")
         smoke_count = min(len(dataset), 32)
         logger.info("Smoke run enabled: using %d rows", smoke_count)
         dataset = dataset.select(range(smoke_count))
 
     dataset = dataset.map(
         _convert_to_messages,
-        remove_columns=[col for col in dataset.column_names if col not in {"prompt", "response"}],
+        fn_kwargs={"input_encoding": cfg.input_encoding},
+        remove_columns=[col for col in dataset.column_names if col not in {"prompt", "response", "game_id", "split"}],
     )
     dataset = dataset.map(
         _add_reasoning_completion_mask,
@@ -225,25 +243,19 @@ def main() -> None:
             "optimize_final_only": cfg.reasoning.optimize_final_only,
             "chat_template_kwargs": chat_template_kwargs,
         },
-        remove_columns=dataset.column_names,
+        remove_columns=[col for col in dataset.column_names if col not in {"game_id", "split"}],
     )
 
-    # A truncated answer or malformed sample cannot contribute a training loss.
-    dataset = dataset.filter(lambda row: any(row["completion_mask"][:cfg.max_seq_length]))
+    # Keep the full board and complete answer, including its stopping token.
+    dataset = dataset.filter(_has_complete_supervision, fn_kwargs={"max_seq_length": cfg.max_seq_length})
     if not len(dataset):
         raise ValueError("No SFT examples have supervised tokens within max_seq_length.")
-    train_dataset = dataset
-    eval_dataset = None
-    if cfg.eval_split_ratio > 0.0 and len(dataset) > 1:
-        eval_size = max(1, int(round(len(dataset) * cfg.eval_split_ratio)))
-        eval_size = min(eval_size, len(dataset) - 1)
-        split = dataset.train_test_split(
-            test_size=eval_size,
-            seed=cfg.seed,
-            shuffle=True,
-        )
-        train_dataset = split["train"]
-        eval_dataset = split["test"]
+    train_dataset, eval_dataset = split_dataset_by_game(dataset, cfg.eval_split_ratio, cfg.seed)
+    # Provenance is for partitioning/audits, not a model input or loss target.
+    metadata_columns = [col for col in ("game_id", "split") if col in dataset.column_names]
+    train_dataset = train_dataset.remove_columns(metadata_columns)
+    if eval_dataset is not None:
+        eval_dataset = eval_dataset.remove_columns(metadata_columns)
     logger.info(
         "Dataset rows: total=%d train=%d eval=%d",
         len(dataset),

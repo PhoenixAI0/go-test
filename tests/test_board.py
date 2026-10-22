@@ -269,3 +269,118 @@ def test_board_state_apply_move_raises_on_illegal():
     # Trying to play on occupied point should raise
     with pytest.raises(ValueError):
         board.apply_move("W", "D4")
+
+
+def _ko_position():
+    board = BoardState.empty(5)
+    for player, move in [("B", "B3"), ("B", "D3"), ("B", "C4"),
+                         ("W", "C3"), ("W", "B2"), ("W", "C1"), ("W", "D2")]:
+        board.apply_move(player, move, strict=True)
+    before = board.current_board()
+    board.apply_move("B", "C2", strict=True)
+    return board, before
+
+
+def test_snapshot_preserves_history_ko_and_passes():
+    original, before_capture = _ko_position()
+    snapshot = BoardState.from_matrix(5, original.current_board(), "W", before_capture)
+    assert "C3" not in snapshot.legal_moves()
+    assert snapshot.previous_board() == before_capture
+    snapshot.apply_move("W", "PASS", strict=True)
+    snapshot.apply_move("B", "PASS", strict=True)
+    assert snapshot.consecutive_passes() == 2
+    assert "C3" in snapshot.legal_moves()
+    assert "C3" not in snapshot.legal_moves(superko=True)
+    assert len(snapshot.position_history()) == 4
+    clone = snapshot.clone()
+    assert clone.moves == snapshot.moves
+    assert clone.position_history() == snapshot.position_history()
+    clone.apply_move("W", "A5", strict=True)
+    assert clone.consecutive_passes() == 0
+    assert snapshot.consecutive_passes() == 2
+    assert clone.current_board() != snapshot.current_board()
+
+
+def test_snapshot_analysis_setup_recovers_capture_and_subsequent_moves():
+    original, before_capture = _ko_position()
+    snapshot = BoardState.from_matrix(5, original.current_board(), "W", before_capture)
+    snapshot.apply_move("W", "A5", strict=True)
+    initial, moves = snapshot.analysis_setup()
+    assert initial == before_capture
+    assert moves == [("B", gtp_to_coords("C2", 5)), ("W", gtp_to_coords("A5", 5))]
+    replayed = BoardState.from_matrix(5, initial, "B")
+    for player, coords in moves:
+        replayed.apply_move(player, coords, strict=True)
+    assert replayed.current_board() == snapshot.current_board()
+    assert replayed.previous_board() == snapshot.previous_board()
+
+
+def test_snapshot_analysis_setup_recovers_pass_and_rejects_inconsistent_context():
+    initial = [[0] * 3 for _ in range(3)]
+    snapshot = BoardState.from_matrix(3, initial, "W", initial)
+    assert snapshot.analysis_setup()[1] == [("B", None)]
+    assert snapshot.consecutive_passes() == 1
+    assert not snapshot.has_two_pass_history()
+    snapshot.apply_move("W", "PASS", strict=True)
+    snapshot.apply_move("B", "A3", strict=True)
+    assert snapshot.consecutive_passes() == 0
+    assert snapshot.has_two_pass_history()  # Includes the identifiable pass before the snapshot.
+    inconsistent = BoardState.from_matrix(3, [[1, 1, 0], [0, 0, 0], [0, 0, 0]], "W", initial)
+    with pytest.raises(ValueError, match="not a legal predecessor"):
+        inconsistent.analysis_setup()
+
+
+def test_cached_replay_invalidates_public_history_mutations():
+    board = BoardState.empty(9)
+    board.apply_move("B", "D4")
+    first = board.current_board()
+    board.moves[0] = ("B", gtp_to_coords("E5", 9))
+    assert board.current_board() != first
+    board.moves.clear()
+    assert not board.occupied()
+    board.moves.append(("W", gtp_to_coords("A1", 9)))
+    assert board.next_player() == "B"
+    assert board.occupied() == {gtp_to_coords("A1", 9)}
+
+
+def test_returned_board_and_history_do_not_mutate_cache():
+    board = BoardState.empty(9)
+    board.apply_move("B", "D4")
+    board.current_board()[0][0] = 2
+    board.position_history()[-1][0][0] = 2
+    board.previous_board()[0][0] = 2
+    assert board.current_board()[0][0] == 0
+    clone = board.clone()
+    clone.apply_move("W", "A9")
+    assert board.current_board()[0][0] == 0
+    assert clone.current_board()[0][0] == 2
+
+
+@pytest.mark.parametrize("size", [9, 19])
+def test_random_full_games_match_independent_sgfmill_board(size):
+    import random
+    from sgfmill import boards
+
+    rng = random.Random(20261022 + size)
+    board = BoardState.empty(size)
+    reference = boards.Board(size)
+    for ply in range(2 * size * size):
+        player = board.next_player()
+        legal = board.legal_moves(include_pass=False)
+        if not legal:
+            board.apply_move(player, None, strict=True)
+            continue
+        move = rng.choice(legal)
+        row, col = gtp_to_coords(move, size)
+        board.apply_move(player, move, strict=True)
+        reference.play(size - 1 - row, col, player.lower())
+        expected = [[{None: 0, "b": 1, "w": 2}[reference.get(size - 1 - r, c)]
+                     for c in range(size)] for r in range(size)]
+        assert board.current_board() == expected, (ply, move)
+        assert len(board.position_history()) == ply + 2
+
+
+@pytest.mark.parametrize("matrix", [[[0, 0], [0]], [[0, 3], [0, 0]]])
+def test_invalid_snapshot_rejected(matrix):
+    with pytest.raises(ValueError):
+        BoardState.from_matrix(2, matrix, "B")

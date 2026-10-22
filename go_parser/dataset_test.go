@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -48,9 +50,9 @@ func TestWriteSampleJSON(t *testing.T) {
 	if err := writer.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	expected := "{\"prompt\": \"board_size: 5\\nto_play: B\\nboard:\\n.....\\n.....\\n.....\\n.....\\n.....\\nmove:\", \"response\": \"A1\", \"board_size\": 5}\n"
-	if buf.String() != expected {
-		t.Fatalf("unexpected JSONL output: %s", buf.String())
+	var decoded Sample
+	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil || decoded.Prompt != prompt || decoded.Response != "A1" || decoded.BoardSize != 5 {
+		t.Fatalf("unexpected JSONL output: %s (%v)", buf.String(), err)
 	}
 }
 
@@ -143,8 +145,84 @@ func TestBuildDatasetSequentialWritesJSONL(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 lines, got %d", len(lines))
 	}
-	if !bytes.Contains(lines[0], []byte("\"board_size\": 5")) {
+	if !bytes.Contains(lines[0], []byte("\"board_size\":5")) {
 		t.Fatalf("expected board_size in output line: %s", string(lines[0]))
+	}
+}
+
+func TestDatasetIndependentOfWorkers(t *testing.T) {
+	dir := t.TempDir()
+	for i, moves := range []string{";B[aa];W[bb];B[cc]", ";B[ab];W[bc];B[cd]", ";B[ac];W[bd];B[ce]", ";B[ad];W[be];B[ca]", ";B[ba];W[cb];B[dc]"} {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.sgf", i)), []byte("(;SZ[5]"+moves+")"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	one, many := filepath.Join(dir, "one.jsonl"), filepath.Join(dir, "many.jsonl")
+	for _, settings := range []struct {
+		path    string
+		workers int
+	}{{one, 1}, {many, 3}} {
+		count, err := buildDatasetWithOptions(dir, settings.path, 7, settings.workers, 42, 2)
+		if err != nil || count != 7 {
+			t.Fatalf("count=%d err=%v", count, err)
+		}
+	}
+	first, _ := os.ReadFile(one)
+	second, _ := os.ReadFile(many)
+	if !bytes.Equal(first, second) {
+		t.Fatalf("worker count changes the dataset\n%s\n%s", first, second)
+	}
+}
+
+func TestGameFingerprintIgnoresAnnotationsAndSymmetry(t *testing.T) {
+	one, err := parseSGFFile(writeTempSGF(t, "(;SZ[5]KM[7.5]RU[Chinese]C[first];B[ab];W[cd];B[ee])"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := parseSGFFile(writeTempSGF(t, "(;SZ[5]KM[6.5]RE[W+R]C[copy];B[ba];W[dc];B[ee])"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gameFingerprint(one) != gameFingerprint(two) {
+		t.Fatal("transposed copies must share a split group")
+	}
+}
+
+func TestMetadataAndSetupArePreserved(t *testing.T) {
+	game, err := parseSGFFile(writeTempSGF(t, "(;SZ[5]KM[0.5]RU[Chinese]RE[W+2.5]HA[2]PL[W]AB[aa][ee];W[cc];B[dd])"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	samples, err := samplePositions(game, 10)
+	if err != nil || len(samples) != 2 {
+		t.Fatalf("%v samples=%d", err, len(samples))
+	}
+	second := samples[1]
+	if second.Komi == nil || *second.Komi != 0.5 || second.Rules != "Chinese" || second.Result != "W+2.5" || second.Handicap != 2 || second.InitialPlayer != "W" || second.ToPlay != "B" || second.MoveNumber != 1 {
+		t.Fatalf("lost metadata: %+v", second)
+	}
+	if !reflect.DeepEqual(second.Moves, [][2]string{{"W", "C3"}}) {
+		t.Fatalf("wrong prefix: %v", second.Moves)
+	}
+	if len(second.InitialStones) != 2 || len(samples[0].Moves) != 0 {
+		t.Fatal("setup mixed into move prefix")
+	}
+	if samples[0].OpponentResponse == nil || *samples[0].OpponentResponse != "D2" || second.OpponentResponse != nil {
+		t.Fatal("opponent auxiliary target is not the next validated move")
+	}
+	if samples, err := samplePositions(game, 0); err != nil || len(samples) != 0 {
+		t.Fatal("zero budget emitted a sample")
+	}
+}
+
+func TestDuplicateGamesRemoved(t *testing.T) {
+	dir := t.TempDir()
+	for i, comment := range []string{"original", "copy"} {
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.sgf", i)), []byte("(;SZ[5]C["+comment+"];B[ab];W[cc])"), 0644)
+	}
+	count, err := buildDataset(dir, filepath.Join(dir, "out.jsonl"), 100, 2)
+	if err != nil || count != 2 {
+		t.Fatalf("expected two unique positions: %d, %v", count, err)
 	}
 }
 

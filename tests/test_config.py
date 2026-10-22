@@ -199,7 +199,7 @@ def test_reasoning_config_defaults():
     cfg = ReasoningConfig()
     assert cfg.enabled is True
     assert cfg.profile == "auto"
-    assert cfg.optimize_final_only is True
+    assert cfg.optimize_final_only is False
     assert cfg.malformed_policy == "mask_all"
     assert cfg.gpt_oss_reasoning_effort == "medium"
     assert cfg.glm_thinking_type == "enabled"

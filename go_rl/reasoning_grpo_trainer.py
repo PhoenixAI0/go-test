@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import warnings
 
 import torch
 from trl import GRPOTrainer
@@ -22,6 +23,14 @@ class ReasoningGRPOTrainer(GRPOTrainer):
         **kwargs: object,
     ) -> None:
         self.reasoning_config = reasoning_config or ReasoningConfig()
+        if self.reasoning_config.enabled and self.reasoning_config.optimize_final_only:
+            warnings.warn(
+                "optimize_final_only omits policy-gradient credit for sampled reasoning "
+                "and malformed answers. Use only as an explicit ablation; the default "
+                "trains all generated tokens, including EOS.",
+                UserWarning,
+                stacklevel=2,
+            )
         super().__init__(*args, **kwargs)
         self._restore_checkpointing_options()
 

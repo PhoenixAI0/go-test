@@ -35,10 +35,14 @@ env/
 data/sgf_9x9/
 data/sgf_19x19/
 data/downloads/
+data/cache/
+data/*.manifest.json
+data/dataset_*_manifest.json
 data/.sgf-import-*/
 data/*.jsonl
 data/*.csv
 data/*.parquet
+data/refresh_ablation_*/
 
 # Model outputs
 outputs/

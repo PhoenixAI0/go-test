@@ -114,3 +114,21 @@ def test_reasoning_grpo_generation_and_rewards_use_autocast(monkeypatch):
     assert all(torch.isfinite(value).all() for value in output.values())
     assert head.weight.dtype == torch.float32
     assert not torch.is_autocast_enabled("cpu")
+
+
+def test_default_trains_reasoning_and_malformed_tokens(monkeypatch):
+    trainer = ReasoningGRPOTrainer.__new__(ReasoningGRPOTrainer)
+    trainer.reasoning_config = ReasoningConfig(profile="qwen3")
+    trainer.reasoning_profile = "qwen3"
+    trainer.processing_class = _Tokenizer()
+    trainer.model = _Model()
+    trainer.accelerator = SimpleNamespace(autocast=nullcontext)
+    # Even a malformed response must receive the illegal-answer gradient.
+    ids = _tensor_ids("<think>not closed").unsqueeze(0)
+    original = torch.ones_like(ids)
+    monkeypatch.setattr(
+        "trl.trainer.grpo_trainer.GRPOTrainer._generate_and_score_completions",
+        lambda *_: {"completion_ids": ids, "completion_mask": original.clone()},
+    )
+    output = trainer._generate_and_score_completions([{}])
+    assert output["completion_mask"].equal(original)

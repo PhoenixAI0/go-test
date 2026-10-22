@@ -113,16 +113,24 @@ def get_optimal_attention_backend() -> Optional[str]:
 
 
 def render_training_prompt(example: dict, tokenizer: object, reasoning_cfg: object,
-                           model_name: str) -> dict[str, str]:
+                           model_name: str, input_encoding: str = "compact", *,
+                           rules: str = "chinese", komi: float = 7.5) -> dict[str, str]:
     """Keep the original board for scoring while matching SFT's chat format."""
     from .reasoning import build_chat_template_kwargs, detect_reasoning_profile
+    from .data_prep import board_from_example
+    from .model_interface import render_position
 
     profile = detect_reasoning_profile(model_name, tokenizer, reasoning_cfg.profile)
     prompt = example["prompt"]
+    model_prompt = render_position(
+        board_from_example(example), input_encoding,
+        rules=example.get("rules") or rules,
+        komi=float(example["komi"] if example.get("komi") is not None else komi),
+    )
     return {
         "board_prompt": prompt,
         "prompt": tokenizer.apply_chat_template(
-            [{"role": "user", "content": prompt}], tokenize=False,
+            [{"role": "user", "content": model_prompt}], tokenize=False,
             add_generation_prompt=True,
             **build_chat_template_kwargs(reasoning_cfg, profile),
         ),

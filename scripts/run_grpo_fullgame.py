@@ -10,9 +10,12 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from go_rl.board import BoardState
+from go_rl.data_prep import board_from_example, state_record_from_board
+from go_rl.reward_context import reward_position
 from go_rl.config import (
     FullGameConfig,
     KataGoConfig,
+    GRPOObjectiveConfig,
     ReasoningConfig,
     RewardConfig,
     RolloutConfig,
@@ -31,7 +34,7 @@ from go_rl.katago_pool import build_katago_service
 from go_rl.logging_utils import setup_logging
 from go_rl.prompting import parse_prompt
 from go_rl.run_logging import write_run_log
-from go_rl.shared_types import BoardKey, KataGoService
+from go_rl.shared_types import KataGoService
 from go_rl.training_utils import (
     add_common_training_args,
     configure_torch_for_speed,
@@ -69,14 +72,18 @@ def build_fullgame_reward_fn(
     full_cfg: FullGameConfig,
     reasoning_cfg: ReasoningConfig | None = None,
     model_name: str = "",
+    input_encoding: str = "compact",
+    default_rules: str | dict[str, object] | None = None,
+    default_komi: float | None = None,
 ) -> Callable[..., list[float]]:
+    """Score root moves using continuations; only root completion tokens train."""
     state = {
         "episode_index": 0,
         "truncated": 0,
         "illegal": 0,
         "fallback_passes": 0,
     }
-    analysis_cache: OrderedDict[BoardKey, KataGoResult] = OrderedDict()
+    analysis_cache: OrderedDict[tuple, KataGoResult] = OrderedDict()
     analysis_cache_max_size = 4096
 
     def reward_fn(prompts: list[str], completions: list[str], **kwargs: object) -> list[float]:
@@ -85,13 +92,10 @@ def build_fullgame_reward_fn(
         if len(prompts) != len(completions):
             raise ValueError("Prompts and completions must have matching lengths.")
         rewards: list[float] = []
-        for prompt, completion in zip(prompts, completions):
-            try:
-                board = parse_prompt(prompt)
-            except ValueError:
-                logger.debug("Failed to parse seed prompt", exc_info=True)
-                rewards.append(float(reward_cfg.illegal_penalty))
-                continue
+        for index, (prompt, completion) in enumerate(zip(prompts, completions)):
+            position = reward_position(prompt, kwargs, index, len(prompts), reward_cfg,
+                                       default_rules, default_komi)
+            board = position.board
 
             # Score the exact position and side used to generate this completion.
             # Resampling here changes the task after the policy has acted.
@@ -103,14 +107,16 @@ def build_fullgame_reward_fn(
                 model=model,
                 tokenizer=tokenizer,
                 katago=katago,
-                reward_cfg=reward_cfg,
+                reward_cfg=position.reward_config,
                 rollout_cfg=rollout_cfg,
                 fullgame_cfg=full_cfg,
                 model_color=model_color,
                 reasoning_cfg=reasoning_cfg,
                 reasoning_model_name=model_name,
+                input_encoding=input_encoding,
                 analysis_cache=analysis_cache,
                 max_cache_size=analysis_cache_max_size,
+                **position.analysis_options,
             )
             rewards.append(float(result.total_reward))
             if result.truncated:
@@ -161,6 +167,9 @@ def main() -> None:
     katago_cfg = KataGoConfig(config_base_dir=config_base_dir, **cfg["katago"])
     reward_cfg = RewardConfig(**cfg["reward"])
     rollout_cfg = RolloutConfig(**cfg["rollout"])
+    objective_cfg = GRPOObjectiveConfig(**(cfg.get("grpo") or {}))
+    if rollout_cfg.num_samples < 2:
+        raise ValueError("GRPO requires rollout.num_samples >= 2.")
     full_cfg = FullGameConfig(**(cfg.get("full_game") or {}))
     if args.max_plies is not None:
         full_cfg.max_plies = args.max_plies
@@ -176,14 +185,22 @@ def main() -> None:
     logger.debug("KataGo config: %s", asdict(katago_cfg))
     logger.debug("Reward config: %s", asdict(reward_cfg))
     logger.debug("Rollout config: %s", asdict(rollout_cfg))
+    logger.info("GRPO objective: %s", asdict(objective_cfg))
+    if rollout_cfg.top_p != 1.0 or rollout_cfg.top_k != 0:
+        logger.warning("Truncated sampling differs from the temperature-softmax policy "
+                       "used for log probabilities; prefer top_p=1 and top_k=0 for RL.")
     logger.debug("Full-game config: %s", asdict(full_cfg))
     logger.debug("Dataset path: %s", dataset_path)
 
-    # Each model turn analyzes the position before and after its move, then asks
-    # KataGo for a reply; the final position is analyzed once more.
+    logger.warning(
+        "This trainer optimizes the initial completion only. Continuation moves are "
+        "value-estimation rollouts, not full-trajectory policy-gradient samples. "
+        "KataGo endpoint scores are estimates and never count as verified wins."
+    )
+    # One opponent query per turn, plus root/endpoint score estimates.
     logger.info(
         "Full-game cost: up to %d KataGo queries per sample (tune full_game.max_model_turns).",
-        3 * full_cfg.max_model_turns + 1,
+        full_cfg.max_model_turns + 2,
     )
 
     try:
@@ -222,6 +239,7 @@ def main() -> None:
         "num_samples": rollout_cfg.num_samples,
         "temperature": rollout_cfg.temperature,
         "reward_config": asdict(reward_cfg),
+        "grpo_objective": asdict(objective_cfg),
         "full_game_config": asdict(full_cfg),
     }
     wandb_tags = ["grpo", "rl", "fullgame", quant_type]
@@ -253,15 +271,19 @@ def main() -> None:
         dataset = dataset.select(range(smoke_count))
     seed_rng = random.Random(train_cfg.seed)
     def prepare_seed(example, index):
-        board = _build_seed_board(example["prompt"], full_cfg, seed_rng)
+        board = board_from_example(example)
+        if seed_rng.random() < full_cfg.seed_empty_board_prob:
+            board = BoardState.empty(board.size)
         color = choose_model_color(board, full_cfg, index)
-        return {"prompt": align_board_to_player_turn(board, color).to_prompt()}
+        return state_record_from_board(align_board_to_player_turn(board, color))
 
     dataset = dataset.map(prepare_seed, with_indices=True, load_from_cache_file=False)
     dataset = dataset.map(
         render_training_prompt,
         fn_kwargs={"tokenizer": tokenizer, "reasoning_cfg": train_cfg.reasoning,
-                   "model_name": train_cfg.model_name},
+                   "model_name": train_cfg.model_name,
+                   "input_encoding": train_cfg.input_encoding,
+                   "rules": katago_cfg.rules, "komi": katago_cfg.komi},
     )
     logger.info("Dataset rows: %d", len(dataset))
 
@@ -286,6 +308,7 @@ def main() -> None:
                 "katago": asdict(katago_cfg),
                 "reward": asdict(reward_cfg),
                 "rollout": asdict(rollout_cfg),
+                "grpo": asdict(objective_cfg),
                 "full_game": asdict(full_cfg),
                 "dataset": dataset_path,
             },
@@ -314,6 +337,7 @@ def main() -> None:
             "num_generations": rollout_cfg.num_samples,
             "temperature": rollout_cfg.temperature,
             "top_p": rollout_cfg.top_p,
+            "top_k": rollout_cfg.top_k,
             "max_completion_length": rollout_cfg.max_tokens,
             "logging_steps": 1 if args.smoke else 10,
             "dataloader_num_workers": num_workers,
@@ -322,6 +346,7 @@ def main() -> None:
             "report_to": [],
             "torch_compile": args.enable_compile,
             **precision_kwargs(train_cfg.quantization_bits),
+            **asdict(objective_cfg),
         }
         max_steps = 1 if args.smoke else train_cfg.num_steps
         trainer_args["max_steps"] = max_steps if max_steps > 0 else -1
@@ -349,6 +374,8 @@ def main() -> None:
                 full_cfg=full_cfg,
                 reasoning_cfg=train_cfg.reasoning,
                 model_name=train_cfg.model_name,
+                input_encoding=train_cfg.input_encoding,
+                default_rules=katago_cfg.rules, default_komi=katago_cfg.komi,
             ),
             train_dataset=dataset,
             args=GRPOConfig(**trainer_args),

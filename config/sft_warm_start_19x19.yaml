@@ -1,33 +1,33 @@
 # SFT Configuration for 19x19 Go
-# This config is optimized for the larger board size with longer game sequences
+# Compatibility TRL SFT entrypoint. The direct research recipe additionally pins
+# the model revision and supports exact optimizer/RNG checkpoint continuation.
 
 dataset_path: data/sft_19x19.jsonl
-model_name: Qwen/Qwen3-8B
+model_name: Qwen/Qwen3-0.6B
+input_encoding: compact
 output_dir: outputs/sft_warm_start_19x19
 log_dir: logs/sft_warm_start_19x19
 
-# Increased sequence length for longer 19x19 games
-# 19x19 games can have 200-400 moves vs 40-80 for 9x9
-max_seq_length: 4096
+# Current board matrix, objective, and recent moves; full game history remains
+# in dataset metadata for verification rather than a 400-move text transcript.
+max_seq_length: 1024
 
 epochs: 1
 
-# Reduced batch size due to larger sequences and memory constraints
-# 19x19 games require ~4x more memory per sample
+# Conservative starting batch; tune against actual memory on the target device.
 batch_size: 2
 
-# Slightly lower learning rate for stability with longer sequences
-learning_rate: 3e-5
+learning_rate: 1e-4
 
-# LoRA configuration (same as 9x9)
-lora_rank: 64
-lora_alpha: 16
+# Small-model baseline, not a demonstrated optimum.
+lora_rank: 16
+lora_alpha: 32
 lora_dropout: 0.0
 
 # Training optimizations
 use_packing: false
-use_8bit_optimizer: true
-quantization_bits: 4
+use_8bit_optimizer: false
+quantization_bits: 16
 
 # Random seed for reproducibility
 seed: 3407

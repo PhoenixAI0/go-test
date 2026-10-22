@@ -110,15 +110,46 @@ def _apply_strict_move(
 
 @dataclass
 class BoardState:
+    """A setup position and subsequent moves, with cached immutable replay states.
+
+    ``board_snapshot`` is the initial setup, not the latest position. Always use
+    ``current_board()`` to read current stones. Keeping setup and moves separate
+    lets KataGo receive the same ko/pass history that our legality checks use.
+    Returned matrices are copies; cached matrices are never modified in place.
+    """
+
     size: int
     moves: List[Tuple[str, Optional[Tuple[int, int]]]] = field(default_factory=list)
     board_snapshot: Optional[List[List[int]]] = None
     next_player_override: Optional[str] = None
     previous_board_snapshot: Optional[List[List[int]]] = None
+    _cached_setup: object = field(default=None, init=False, repr=False, compare=False)
+    _cached_moves: tuple = field(default=(), init=False, repr=False, compare=False)
+    _cached_positions: List[List[List[int]]] = field(
+        default_factory=list, init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.size, int) or not 1 <= self.size <= len(_GTP_COLUMNS):
+            raise ValueError("Board size must be an integer between 1 and 19")
+        for label, matrix in (
+            ("Board", self.board_snapshot),
+            ("Previous board", self.previous_board_snapshot),
+        ):
+            if matrix is not None:
+                if len(matrix) != self.size or any(len(row) != self.size for row in matrix):
+                    raise ValueError(f"{label} matrix shape does not match board size")
+                if any(value not in (0, 1, 2) for row in matrix for value in row):
+                    raise ValueError(f"{label} matrix contains invalid stone values")
+        if self.next_player_override is not None:
+            normalized = self.next_player_override.strip().upper()
+            if normalized not in _STONE:
+                raise ValueError(f"Unknown player: {self.next_player_override}")
+            self.next_player_override = normalized
 
     @classmethod
     def empty(cls, size: int) -> "BoardState":
-        return cls(size=size, moves=[])
+        return cls(size=size)
 
     @classmethod
     def from_matrix(
@@ -128,19 +159,10 @@ class BoardState:
         next_player: str,
         previous_board: Optional[List[List[int]]] = None,
     ) -> "BoardState":
-        normalized = next_player.strip().upper()
-        if normalized not in _STONE:
-            raise ValueError(f"Unknown player: {next_player}")
-        if len(board) != size or any(len(row) != size for row in board):
-            raise ValueError("Board matrix shape does not match board size")
-        if previous_board is not None:
-            if len(previous_board) != size or any(len(row) != size for row in previous_board):
-                raise ValueError("Previous board matrix shape does not match board size")
         return cls(
             size=size,
-            moves=[],
             board_snapshot=_copy_board(board),
-            next_player_override=normalized,
+            next_player_override=next_player,
             previous_board_snapshot=_copy_board(previous_board) if previous_board is not None else None,
         )
 
@@ -148,129 +170,217 @@ class BoardState:
         return self.board_snapshot is not None
 
     def clone(self) -> "BoardState":
-        if self.board_snapshot is not None:
-            return BoardState.from_matrix(
-                size=self.size,
-                board=self.board_snapshot,
-                next_player=self.next_player(),
-                previous_board=self.previous_board_snapshot,
-            )
-        return BoardState(size=self.size, moves=list(self.moves))
+        clone = BoardState(
+            size=self.size,
+            moves=list(self.moves),
+            board_snapshot=_copy_board(self.board_snapshot) if self.board_snapshot is not None else None,
+            next_player_override=self.next_player_override,
+            previous_board_snapshot=(
+                _copy_board(self.previous_board_snapshot)
+                if self.previous_board_snapshot is not None else None
+            ),
+        )
+        # Matrices in this cache are immutable by convention. Branches only add
+        # new matrices; sharing old positions avoids O(game length * area) copies.
+        clone._cached_setup = self._cached_setup
+        clone._cached_moves = self._cached_moves
+        clone._cached_positions = list(self._cached_positions)
+        return clone
 
-    def _replay(self) -> Iterator[List[List[int]]]:
-        """Yield the empty board, then a fresh board after each recorded move."""
-        board = [[_EMPTY for _ in range(self.size)] for _ in range(self.size)]
-        yield board
-        for index, (player, coords) in enumerate(self.moves, start=1):
+    def _positions(self) -> List[List[List[int]]]:
+        setup = (
+            self.size,
+            tuple(tuple(row) for row in self.board_snapshot)
+            if self.board_snapshot is not None else None,
+        )
+        moves = tuple(self.moves)
+        if self._cached_positions and self._cached_setup == setup and self._cached_moves == moves:
+            return self._cached_positions
+        if (self._cached_positions and self._cached_setup == setup
+                and moves[:len(self._cached_moves)] == self._cached_moves):
+            positions = list(self._cached_positions)
+            start = len(self._cached_moves)
+        else:
+            initial = (_copy_board(self.board_snapshot) if self.board_snapshot is not None
+                       else [[_EMPTY] * self.size for _ in range(self.size)])
+            positions = [initial]
+            start = 0
+        board = positions[-1]
+        for index in range(start, len(moves)):
+            player, coords = moves[index]
+            color = _STONE.get(player.upper())
+            if color is None:
+                raise ValueError(f"Unknown player at move {index + 1}: {player}")
             if coords is not None:
-                color = _STONE.get(player.upper())
-                if color is None:
-                    raise ValueError(f"Unknown player at move {index}: {player}")
+                row, col = coords
+                if not 0 <= row < self.size or not 0 <= col < self.size:
+                    raise ValueError(f"Move out of bounds at {index + 1}: {coords}")
                 try:
                     board = _apply_strict_move(board, color, coords)
                 except ValueError as exc:
-                    raise ValueError(f"Illegal move at {index}: {player} {coords}") from exc
-            yield board
+                    raise ValueError(f"Illegal move at {index + 1}: {player} {coords}") from exc
+            positions.append(board)
+        self._cached_setup = setup
+        self._cached_moves = moves
+        self._cached_positions = positions
+        return positions
+
+    def _replay(self) -> Iterator[List[List[int]]]:
+        """Yield independent copies of the setup and every subsequent position."""
+        for board in self._positions():
+            yield _copy_board(board)
 
     def _current_board(self) -> List[List[int]]:
-        if self.board_snapshot is not None:
-            return _copy_board(self.board_snapshot)
-        *_, board = self._replay()
-        return board
+        return _copy_board(self._positions()[-1])
 
     def position_history(self) -> List[List[List[int]]]:
-        """All known whole-board positions so far, oldest first (for superko).
-
-        Snapshot boards only know their current and previous positions.
-        """
-        if self.board_snapshot is not None:
-            positions = [self.previous_board_snapshot, self.board_snapshot]
-            return [_copy_board(board) for board in positions if board is not None]
-        return list(self._replay())
+        """All known positions, including setup context, oldest first."""
+        positions = self._positions()
+        if self.previous_board_snapshot is not None:
+            positions = [self.previous_board_snapshot, *positions]
+        return [_copy_board(board) for board in positions]
 
     def current_board(self) -> List[List[int]]:
         return self._current_board()
 
     def previous_board(self) -> Optional[List[List[int]]]:
-        if self.previous_board_snapshot is None:
-            return None
-        return _copy_board(self.previous_board_snapshot)
+        _, previous = self._strict_board_state()
+        return _copy_board(previous) if previous is not None else None
 
     def occupied(self) -> set[Tuple[int, int]]:
-        board = self._current_board()
-        stones = set()
-        for row in range(self.size):
-            for col in range(self.size):
-                if board[row][col] != _EMPTY:
-                    stones.add((row, col))
-        return stones
+        return {(row, col) for row, cells in enumerate(self._positions()[-1])
+                for col, value in enumerate(cells) if value != _EMPTY}
 
     def stones(self) -> List[Tuple[str, Tuple[int, int]]]:
-        stones: List[Tuple[str, Tuple[int, int]]] = []
-        board = self._current_board()
-        for row in range(self.size):
-            for col in range(self.size):
-                value = board[row][col]
-                if value == _STONE["B"]:
-                    stones.append(("B", (row, col)))
-                elif value == _STONE["W"]:
-                    stones.append(("W", (row, col)))
-        return stones
+        return [("B" if value == _STONE["B"] else "W", (row, col))
+                for row, cells in enumerate(self._positions()[-1])
+                for col, value in enumerate(cells) if value != _EMPTY]
 
     def next_player(self) -> str:
-        if self.next_player_override is not None:
-            return self.next_player_override
-        if not self.moves:
-            return "B"
-        last_player = self.moves[-1][0].upper()
-        if last_player == "B":
-            return "W"
-        if last_player == "W":
-            return "B"
-        black_moves = sum(1 for player, _ in self.moves if player.upper() == "B")
-        white_moves = sum(1 for player, _ in self.moves if player.upper() == "W")
-        return "B" if black_moves == white_moves else "W"
+        if self.moves:
+            last_player = self.moves[-1][0].strip().upper()
+            if last_player not in _STONE:
+                raise ValueError(f"Unknown player: {self.moves[-1][0]}")
+            return "W" if last_player == "B" else "B"
+        return self.next_player_override or "B"
+
+    def consecutive_passes(self) -> int:
+        count = 0
+        for _, coords in reversed(self.moves):
+            if coords is not None:
+                return count
+            count += 1
+        if self.board_snapshot is not None and self.previous_board_snapshot == self.board_snapshot:
+            count += 1
+        return count
+
+    def has_two_pass_history(self) -> bool:
+        """Whether known history ever reaches two consecutive passes.
+
+        This includes a pass identifiable immediately before a snapshot. It is
+        a history fact; whether it ends a game depends on the experiment/rules.
+        """
+        passes = int(self.board_snapshot is not None
+                     and self.previous_board_snapshot == self.board_snapshot)
+        for _, coords in self.moves:
+            passes = passes + 1 if coords is None else 0
+            if passes >= 2:
+                return True
+        return False
 
     def is_basic_legal(self, coords: Optional[Tuple[int, int]]) -> bool:
         if coords is None:
             return True
         row, col = coords
-        if row < 0 or row >= self.size or col < 0 or col >= self.size:
+        if not 0 <= row < self.size or not 0 <= col < self.size:
             return False
-        board = self._current_board()
-        return board[row][col] == _EMPTY
+        return self._positions()[-1][row][col] == _EMPTY
 
     def _strict_board_state(
         self,
     ) -> Tuple[List[List[int]], Optional[List[List[int]]]]:
-        if self.board_snapshot is not None:
-            return _copy_board(self.board_snapshot), self.previous_board()
-        positions = list(self._replay())
-        # The ko comparison point is the position before the last move (or pass).
-        return positions[-1], positions[-2] if len(positions) > 1 else None
+        positions = self._positions()
+        previous = positions[-2] if len(positions) > 1 else self.previous_board_snapshot
+        return positions[-1], previous
 
     def is_strict_legal(self, player: str, coords: Optional[Tuple[int, int]]) -> bool:
+        color = _STONE.get(player.strip().upper())
+        if color is None:
+            return False
         if coords is None:
             return True
-        color = _STONE.get(player.upper())
-        if color is None:
+        row, col = coords
+        if not 0 <= row < self.size or not 0 <= col < self.size:
             return False
         try:
             board, previous = self._strict_board_state()
-        except ValueError:
-            return False
-        row, col = coords
-        if row < 0 or row >= self.size or col < 0 or col >= self.size:
-            return False
-        if board[row][col] != _EMPTY:
-            return False
-        try:
             next_board = _apply_strict_move(board, color, coords)
         except ValueError:
             return False
-        if previous is not None and next_board == previous:
-            return False
-        return True
+        return previous is None or next_board != previous
+
+    def legal_moves(
+        self,
+        player: Optional[str] = None,
+        *,
+        superko: bool = False,
+        include_pass: bool = True,
+    ) -> List[str]:
+        """List legal GTP actions in board order, optionally with positional superko.
+
+        A snapshot can only enforce repetition against its known history. Use
+        the original setup and full move prefix when strict superko is needed.
+        """
+        to_play = player.strip().upper() if player is not None else self.next_player()
+        if to_play not in _STONE:
+            raise ValueError(f"Unknown player: {player}")
+        board, previous = self._strict_board_state()
+        history = {tuple(tuple(row) for row in position) for position in self.position_history()} if superko else set()
+        legal = []
+        for row in range(self.size):
+            for col in range(self.size):
+                if board[row][col] != _EMPTY:
+                    continue
+                try:
+                    candidate = _apply_strict_move(board, _STONE[to_play], (row, col))
+                except ValueError:
+                    continue
+                if previous is not None and candidate == previous:
+                    continue
+                if superko and tuple(tuple(cells) for cells in candidate) in history:
+                    continue
+                legal.append(coords_to_gtp((row, col), self.size))
+        if include_pass:
+            legal.append("PASS")
+        return legal
+
+    def analysis_setup(self) -> Tuple[Optional[List[List[int]]], List[Tuple[str, Optional[Tuple[int, int]]]]]:
+        """Return KataGo's initial stones and moves without losing ko context.
+
+        A legacy snapshot may provide only the immediately preceding board.
+        Recover its last move (including captures) when this transition is
+        verifiable. Reject inconsistent context instead of silently dropping it.
+        """
+        moves = list(self.moves)
+        initial = self.board_snapshot
+        previous = self.previous_board_snapshot
+        if initial is None or previous is None:
+            return _copy_board(initial) if initial is not None else None, moves
+        to_play = self.next_player_override or (moves[0][0].upper() if moves else "B")
+        last_player = "W" if to_play == "B" else "B"
+        if initial == previous:
+            return _copy_board(previous), [(last_player, None), *moves]
+        color = _STONE[last_player]
+        additions = [(row, col) for row in range(self.size) for col in range(self.size)
+                     if initial[row][col] == color and previous[row][col] != color]
+        if len(additions) == 1:
+            try:
+                reconstructed = _apply_strict_move(previous, color, additions[0])
+            except ValueError:
+                reconstructed = None
+            if reconstructed == initial:
+                return _copy_board(previous), [(last_player, additions[0]), *moves]
+        raise ValueError("Snapshot previous_board is not a legal predecessor; provide the original setup and move history")
 
     def apply_move(
         self,
@@ -282,40 +392,24 @@ class BoardState:
         if player not in _STONE:
             raise ValueError(f"Unknown player: {player}")
         if move is None:
-            coords = None
-            move_label = "PASS"
+            coords, move_label = None, "PASS"
         elif isinstance(move, tuple):
-            coords = move
-            move_label = str(move)
+            coords, move_label = move, str(move)
         else:
-            coords = gtp_to_coords(move, self.size)
-            move_label = move
-        if strict:
-            is_legal = self.is_strict_legal(player, coords)
-        else:
-            is_legal = self.is_basic_legal(coords)
+            coords, move_label = gtp_to_coords(move, self.size), move
+        is_legal = self.is_strict_legal(player, coords) if strict else self.is_basic_legal(coords)
         if not is_legal:
             rule_label = "strict" if strict else "basic"
             raise ValueError(f"Illegal move for {rule_label} rules: {move_label}")
-        if self.board_snapshot is not None:
-            current = self._current_board()
-            self.previous_board_snapshot = _copy_board(current)
-            if coords is not None:
-                color = _STONE[player]
-                current = _apply_strict_move(current, color, coords)
-            self.board_snapshot = current
-            self.next_player_override = "W" if player == "B" else "B"
-            return
         self.moves.append((player, coords))
 
     def to_prompt(self, player: Optional[str] = None) -> str:
         to_play = player.strip().upper() if player is not None else self.next_player()
         if to_play not in _STONE:
             raise ValueError(f"Unknown player: {player}")
-        board = self._current_board()
+        board = self._positions()[-1]
         lines = [f"board_size: {self.size}", f"to_play: {to_play}", "board:"]
         for row in board:
-            row_text = "".join(_STONE_TO_CHAR[value] for value in row)
-            lines.append(row_text)
+            lines.append("".join(_STONE_TO_CHAR[value] for value in row))
         lines.append("move:")
         return "\n".join(lines)

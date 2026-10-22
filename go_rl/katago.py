@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import subprocess
 import threading
@@ -41,6 +42,7 @@ class KataGoAnalysisClient:
         self._shutdown_event = threading.Event()
         self._pending_ready = threading.Event()
         self._next_id = 1
+        self._terminal_error: BaseException | None = None
         self._stderr_thread: Optional[threading.Thread] = None
         self._stdout_thread: Optional[threading.Thread] = None
 
@@ -63,6 +65,7 @@ class KataGoAnalysisClient:
             env["CUDA_VISIBLE_DEVICES"] = self.config.katago_cuda_visible_devices
         logger.info("Starting KataGo analysis process")
         self._shutdown_event.clear()
+        self._terminal_error = None
         self._process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -137,11 +140,10 @@ class KataGoAnalysisClient:
             line = process.stdout.readline()
             if line == "":
                 if not self._shutdown_event.is_set():
-                    self._fail_all_pending(
-                        RuntimeError(
-                            "KataGo process ended before all responses were received."
-                        )
-                    )
+                    error = RuntimeError("KataGo process ended before all responses were received.")
+                    with self._pending_lock:
+                        self._terminal_error = error
+                        self._fail_all_pending(error)
                 return
             text = line.strip()
             if not text:
@@ -168,6 +170,9 @@ class KataGoAnalysisClient:
                 continue
             if response.get("isDuringSearch"):
                 continue
+            if "warning" in response and "rootInfo" not in response and "error" not in response:
+                logger.warning("KataGo request %s: %s", req_id, response["warning"])
+                continue
             if "error" in response:
                 pending.error = RuntimeError(f"KataGo rejected request {req_id}: {response['error']}")
             pending.response = response
@@ -192,6 +197,8 @@ class KataGoAnalysisClient:
     def _register_pending(self, req_id: int) -> _PendingRequest:
         pending = _PendingRequest(event=threading.Event())
         with self._pending_lock:
+            if self._terminal_error is not None:
+                raise RuntimeError(f"KataGo process is unavailable: {self._terminal_error}") from self._terminal_error
             if req_id in self._pending:
                 raise RuntimeError(f"Duplicate request id: {req_id}")
             self._pending[req_id] = pending
@@ -237,8 +244,7 @@ class KataGoAnalysisClient:
             timeout if timeout is not None else self.config.request_timeout_seconds
         )
         if not pending.event.wait(wait_timeout):
-            with self._pending_lock:
-                self._pending.pop(req_id, None)
+            self.cancel_request(req_id)
             raise TimeoutError(f"KataGo request {req_id} timed out.")
         with self._pending_lock:
             self._pending.pop(req_id, None)
@@ -249,6 +255,27 @@ class KataGoAnalysisClient:
         logger.debug("Received KataGo response id=%s", req_id)
         return pending.response
 
+    def cancel_request(self, req_id: int) -> None:
+        """Release an abandoned handle and stop its engine work when possible."""
+        with self._pending_lock:
+            pending = self._pending.pop(req_id, None)
+        if pending is None:
+            return
+        completed = pending.event.is_set()
+        if not completed:
+            pending.error = RuntimeError("KataGo request cancelled")
+            pending.event.set()
+        if completed or self._process is None or self._shutdown_event.is_set():
+            return
+        try:
+            with self._write_lock:
+                self._write_payload({
+                    "id": self._next_request_id(), "action": "terminate",
+                    "terminateId": str(req_id),
+                })
+        except (OSError, RuntimeError):
+            logger.debug("Could not terminate abandoned KataGo request %s", req_id, exc_info=True)
+
     def _send(self, payload: dict[str, object]) -> KataGoResponse:
         if self._process is None:
             raise RuntimeError("KataGo process not started.")
@@ -257,38 +284,68 @@ class KataGoAnalysisClient:
         req_id = self._submit_payload(payload)
         return self._await_raw_result(req_id)
 
-    def _build_payload(self, board: BoardState, req_id: int) -> dict[str, object]:
+    def _build_payload(
+        self,
+        board: BoardState,
+        req_id: int,
+        *,
+        max_visits: Optional[int] = None,
+        include_policy: bool = False,
+        include_ownership: bool = False,
+        rules: str | dict[str, object] | None = None,
+        komi: float | None = None,
+    ) -> dict[str, object]:
         payload: dict[str, object] = {
             "id": req_id,
             "boardXSize": board.size,
             "boardYSize": board.size,
-            "rules": self.config.rules,
-            "komi": self.config.komi,
+            "rules": self.config.rules if rules is None else rules,
+            "komi": self.config.komi if komi is None else komi,
         }
-        if board.has_snapshot():
+        if komi is not None and (not math.isfinite(komi) or not -400 <= komi <= 400 or not float(2 * komi).is_integer()):
+            raise ValueError("komi must be a finite integer or half-integer between -400 and 400")
+        initial, moves = board.analysis_setup()
+        if initial is not None:
             payload["initialStones"] = [
-                [player.lower(), coords_to_gtp(coords, board.size).lower()]
-                for player, coords in board.stones()
+                ["b" if value == 1 else "w", coords_to_gtp((row, col), board.size).lower()]
+                for row, cells in enumerate(initial)
+                for col, value in enumerate(cells) if value != 0
             ]
+        if moves:
+            payload["initialPlayer"] = moves[0][0].lower()
+        else:
             payload["initialPlayer"] = board.next_player().lower()
-            payload["moves"] = []
-            return payload
         payload["moves"] = [
-                [player.lower(), coords_to_gtp(coords, board.size).lower()]
-                if coords is not None
-                else [player.lower(), "pass"]
-                for player, coords in board.moves
-            ]
+            [player.lower(), coords_to_gtp(coords, board.size).lower()]
+            for player, coords in moves
+        ]
+        if max_visits is not None:
+            if not isinstance(max_visits, int) or max_visits < 1:
+                raise ValueError("max_visits must be a positive integer")
+            payload["maxVisits"] = max_visits
+        if include_policy:
+            payload["includePolicy"] = True
+        if include_ownership:
+            payload["includeOwnership"] = True
         return payload
 
-    def submit_position(self, board: BoardState) -> int:
+    def submit_position(
+        self,
+        board: BoardState,
+        *,
+        max_visits: Optional[int] = None,
+        include_policy: bool = False,
+        include_ownership: bool = False,
+        rules: str | dict[str, object] | None = None,
+        komi: float | None = None,
+    ) -> int:
         req_id = self._next_request_id()
-        payload = self._build_payload(board, req_id)
-        logger.debug(
-            "Submitting position id=%d with %d stones",
-            req_id,
-            len(board.stones()),
+        payload = self._build_payload(
+            board, req_id, max_visits=max_visits,
+            include_policy=include_policy, include_ownership=include_ownership,
+            rules=rules, komi=komi,
         )
+        logger.debug("Submitting position id=%d with %d moves", req_id, len(board.moves))
         self._submit_payload(payload)
         return req_id
 
@@ -305,16 +362,37 @@ class KataGoAnalysisClient:
             best_move=_extract_best_move(result),
         )
 
-    def analyze_position(self, board: BoardState) -> KataGoResult:
-        req_id = self.submit_position(board)
+    def analyze_position(
+        self, board: BoardState, *, max_visits: Optional[int] = None,
+        include_policy: bool = False, include_ownership: bool = False,
+        rules: str | dict[str, object] | None = None, komi: float | None = None,
+    ) -> KataGoResult:
+        req_id = self.submit_position(
+            board, max_visits=max_visits,
+            include_policy=include_policy, include_ownership=include_ownership,
+            rules=rules, komi=komi,
+        )
         return self.await_result(req_id)
 
-    def analyze_positions(self, boards: Iterable[BoardState]) -> list[KataGoResult]:
-        board_list = list(boards)
-        if not board_list:
-            return []
-        request_ids = [self.submit_position(board) for board in board_list]
-        return [self.await_result(req_id) for req_id in request_ids]
+    def analyze_positions(
+        self, boards: Iterable[BoardState], *, max_visits: Optional[int] = None,
+        include_policy: bool = False, include_ownership: bool = False,
+        rules: str | dict[str, object] | None = None, komi: float | None = None,
+    ) -> list[KataGoResult]:
+        request_ids: list[int] = []
+        try:
+            for board in boards:
+                request_ids.append(self.submit_position(
+                    board, max_visits=max_visits,
+                    include_policy=include_policy, include_ownership=include_ownership,
+                    rules=rules, komi=komi,
+                ))
+            return [self.await_result(req_id) for req_id in request_ids]
+        finally:
+            # A rejected board or failed await must not retain the rest of a
+            # large batch indefinitely or waste search on abandoned requests.
+            for req_id in request_ids:
+                self.cancel_request(req_id)
 
     def evaluate_moves(
         self,
@@ -333,14 +411,17 @@ class KataGoAnalysisClient:
         candidate_boards: list[BoardState] = []
         for move in move_list:
             candidate = board.clone()
-            candidate.apply_move(move_player, move)
+            candidate.apply_move(move_player, move, strict=True)
             candidate_boards.append(candidate)
         analyses = self.analyze_positions(candidate_boards)
         for move, analysis in zip(move_list, analyses):
             results[move] = analysis.winrate
         return results
 
-    def choose_move(self, board: BoardState, player: Optional[str] = None) -> str:
+    def choose_move(
+        self, board: BoardState, player: Optional[str] = None, *,
+        rules: str | dict[str, object] | None = None, komi: float | None = None,
+    ) -> str:
         """Choose KataGo's best move for the provided board and player.
 
         Falls back to PASS when no move is available or the suggested move is invalid.
@@ -350,7 +431,12 @@ class KataGoAnalysisClient:
         if analysis_board.next_player() != move_player:
             analysis_board.apply_move(analysis_board.next_player(), "PASS", strict=True)
 
-        analysis = self.analyze_position(analysis_board)
+        options = {}
+        if rules is not None:
+            options["rules"] = rules
+        if komi is not None:
+            options["komi"] = komi
+        analysis = self.analyze_position(analysis_board, **options)
         best_move = analysis.best_move
         if not best_move:
             return "PASS"
@@ -366,14 +452,20 @@ class KataGoAnalysisClient:
 def _extract_winrate(result: KataGoResponse) -> float:
     root_info = result.get("rootInfo")
     if isinstance(root_info, dict) and "winrate" in root_info:
-        return float(root_info["winrate"])
+        value = float(root_info["winrate"])
+        if not math.isfinite(value) or not 0 <= value <= 1:
+            raise ValueError("KataGo winrate must be finite and in [0, 1]")
+        return value
     raise KeyError("KataGo response missing rootInfo.winrate")
 
 
 def _extract_score_lead(result: KataGoResponse) -> Optional[float]:
     root_info = result.get("rootInfo")
     if isinstance(root_info, dict) and "scoreLead" in root_info:
-        return float(root_info["scoreLead"])
+        value = float(root_info["scoreLead"])
+        if not math.isfinite(value):
+            raise ValueError("KataGo scoreLead must be finite")
+        return value
     return None
 
 
@@ -381,9 +473,10 @@ def _extract_best_move(result: KataGoResponse) -> Optional[str]:
     move_infos = result.get("moveInfos")
     if not isinstance(move_infos, list) or not move_infos:
         return None
-    best = move_infos[0]
-    if not isinstance(best, dict):
+    candidates = [info for info in move_infos if isinstance(info, dict)]
+    if not candidates:
         return None
+    best = min(candidates, key=lambda info: info.get("order", float("inf")))
     move = best.get("move")
     if not isinstance(move, str) or not move.strip():
         return None

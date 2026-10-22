@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -15,9 +16,14 @@ type Move struct {
 
 // SgfGame represents a parsed SGF game.
 type SgfGame struct {
-	BoardSize   int
-	Moves       []Move
-	SetupStones []Move
+	BoardSize     int
+	Moves         []Move
+	SetupStones   []Move
+	Komi          *float64
+	Rules         string
+	Result        string
+	Handicap      int
+	InitialPlayer string
 }
 
 type sgfNode struct {
@@ -44,6 +50,9 @@ func parseSGFFile(path string) (*SgfGame, error) {
 	}
 
 	root := nodes[0]
+	if gm := firstProperty(root, "GM"); gm != "" && gm != "1" {
+		return nil, fmt.Errorf("not a Go game: GM[%s]", gm)
+	}
 	boardSize := 19
 	if sizeVals, ok := root.Props["SZ"]; ok && len(sizeVals) > 0 {
 		boardSize, err = parseBoardSize(sizeVals[0])
@@ -57,8 +66,34 @@ func parseSGFFile(path string) (*SgfGame, error) {
 		return nil, err
 	}
 
-	moves := make([]Move, 0, len(nodes)-1)
-	for _, node := range nodes[1:] {
+	var komi *float64
+	if raw := firstProperty(root, "KM"); raw != "" {
+		value, err := strconv.ParseFloat(raw, 64)
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+			return nil, fmt.Errorf("invalid komi: %s", raw)
+		}
+		komi = &value
+	}
+	handicap := 0
+	if raw := firstProperty(root, "HA"); raw != "" {
+		handicap, err = strconv.Atoi(raw)
+		if err != nil || handicap < 0 {
+			return nil, fmt.Errorf("invalid handicap: %s", raw)
+		}
+	}
+	initialPlayer := strings.ToUpper(firstProperty(root, "PL"))
+	if initialPlayer != "" && initialPlayer != "B" && initialPlayer != "W" {
+		return nil, fmt.Errorf("invalid initial player: %s", initialPlayer)
+	}
+	moves := make([]Move, 0, len(nodes))
+	for i, node := range nodes {
+		if i > 0 {
+			for _, property := range []string{"AB", "AW", "AE", "PL"} {
+				if _, exists := node.Props[property]; exists {
+					return nil, fmt.Errorf("mid-game %s changes are not supported", property)
+				}
+			}
+		}
 		move, ok, err := parseMoveNode(node, boardSize)
 		if err != nil {
 			return nil, err
@@ -67,12 +102,32 @@ func parseSGFFile(path string) (*SgfGame, error) {
 			moves = append(moves, move)
 		}
 	}
+	if initialPlayer == "" {
+		initialPlayer = "B"
+		if len(moves) > 0 {
+			initialPlayer = moves[0].Player
+		} else if handicap >= 2 {
+			initialPlayer = "W"
+		}
+	}
 
 	return &SgfGame{
-		BoardSize:   boardSize,
-		Moves:       moves,
-		SetupStones: setup,
+		BoardSize:     boardSize,
+		Moves:         moves,
+		SetupStones:   setup,
+		Komi:          komi,
+		Rules:         firstProperty(root, "RU"),
+		Result:        firstProperty(root, "RE"),
+		Handicap:      handicap,
+		InitialPlayer: initialPlayer,
 	}, nil
+}
+
+func firstProperty(node sgfNode, key string) string {
+	if values := node.Props[key]; len(values) > 0 {
+		return strings.TrimSpace(values[0])
+	}
+	return ""
 }
 
 func parseBoardSize(raw string) (int, error) {
@@ -170,6 +225,9 @@ func expandCoordRange(start Coord, end Coord) []Coord {
 }
 
 func parseMoveNode(node sgfNode, boardSize int) (Move, bool, error) {
+	if len(node.Props["B"]) > 1 || len(node.Props["W"]) > 1 || (len(node.Props["B"]) > 0 && len(node.Props["W"]) > 0) {
+		return Move{}, false, fmt.Errorf("SGF node must contain at most one move")
+	}
 	if vals, ok := node.Props["B"]; ok && len(vals) > 0 {
 		move, err := parseMove("B", vals[0], boardSize)
 		return move, true, err

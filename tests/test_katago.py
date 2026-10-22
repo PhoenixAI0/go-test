@@ -462,3 +462,105 @@ def test_engine_exit_preserves_completed_results_and_failed_handles(katago_confi
     with pytest.raises(RuntimeError, match="engine exited"):
         client._await_raw_result(2)
     assert not client._pending
+
+
+def test_snapshot_payload_preserves_origin_and_later_passes(katago_config):
+    board = BoardState.from_matrix(3, [[1, 0, 0], [0, 0, 0], [0, 0, 0]], "W")
+    board.apply_move("W", "B2", strict=True)
+    board.apply_move("B", "PASS", strict=True)
+    payload = KataGoAnalysisClient(katago_config)._build_payload(board, 1)
+    assert payload["initialStones"] == [["b", "a3"]]
+    assert payload["initialPlayer"] == "w"
+    assert payload["moves"] == [["w", "b2"], ["b", "pass"]]
+
+
+def test_analysis_options_expose_dense_teacher_signals(katago_config):
+    client = KataGoAnalysisClient(katago_config)
+    payload = client._build_payload(BoardState.empty(19), 1, max_visits=8,
+                                    include_policy=True, include_ownership=True)
+    assert payload["maxVisits"] == 8
+    assert payload["includePolicy"] is True
+    assert payload["includeOwnership"] is True
+    with pytest.raises(ValueError, match="positive integer"):
+        client._build_payload(BoardState.empty(19), 2, max_visits=0)
+
+
+@patch("subprocess.Popen")
+def test_warning_does_not_complete_analysis(mock_popen, katago_config):
+    def on_request(payload, proc):
+        proc.stdout.push(json.dumps({"id": payload["id"], "warning": "rules adjusted"}) + "\n")
+        proc.stdout.push(json.dumps({"id": payload["id"], "rootInfo": {"winrate": 0.7}}) + "\n")
+
+    mock_popen.return_value = _FakeProcess(on_request)
+    client = KataGoAnalysisClient(katago_config)
+    try:
+        client.start()
+        assert client.analyze_position(BoardState.empty(9)).winrate == 0.7
+    finally:
+        client.close()
+
+
+def test_best_move_uses_engine_order_instead_of_array_order():
+    response = {"moveInfos": [{"move": "A1", "order": 2}, {"move": "D4", "order": 0}]}
+    assert _extract_best_move(response) == "D4"
+
+
+def test_per_position_komi_and_rules_do_not_mutate_defaults(katago_config):
+    client = KataGoAnalysisClient(katago_config)
+    payload = client._build_payload(BoardState.empty(19), 1, komi=6.5, rules="japanese")
+    assert payload["komi"] == 6.5 and payload["rules"] == "japanese"
+    default_payload = client._build_payload(BoardState.empty(19), 2)
+    assert default_payload["komi"] == 7.5 and default_payload["rules"] == "chinese"
+    for komi in [float("nan"), float("inf"), 0.3, 500]:
+        with pytest.raises(ValueError, match="komi must be"):
+            client._build_payload(BoardState.empty(19), 3, komi=komi)
+
+
+@patch("subprocess.Popen")
+def test_failed_batch_releases_other_handles(mock_popen, katago_config):
+    def on_request(payload, proc):
+        if payload.get("action") == "terminate":
+            return
+        if int(payload["id"]) == 1:
+            proc.stdout.push(json.dumps({"id": payload["id"], "error": "illegal history"}) + "\n")
+
+    fake = _FakeProcess(on_request)
+    mock_popen.return_value = fake
+    client = KataGoAnalysisClient(katago_config)
+    try:
+        client.start()
+        with pytest.raises(RuntimeError, match="illegal history"):
+            client.analyze_positions([BoardState.empty(9), BoardState.empty(9)])
+        assert not client._pending
+        controls = [json.loads(line) for line in fake.stdin.writes]
+        assert any(payload.get("terminateId") == "2" for payload in controls)
+    finally:
+        client.close()
+
+
+@patch("subprocess.Popen")
+def test_requests_after_reader_eof_fail_without_waiting(mock_popen, katago_config):
+    def on_request(payload, proc):
+        proc.stdout.close()
+
+    mock_popen.return_value = _FakeProcess(on_request)
+    client = KataGoAnalysisClient(katago_config)
+    try:
+        client.start()
+        with pytest.raises(RuntimeError, match="ended"):
+            client.analyze_position(BoardState.empty(9))
+        with pytest.raises(RuntimeError, match="unavailable"):
+            client.submit_position(BoardState.empty(9))
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -0.1, 1.1])
+def test_invalid_engine_winrates_never_enter_rewards(value):
+    with pytest.raises(ValueError, match="finite"):
+        _extract_winrate({"rootInfo": {"winrate": value}})
+
+
+def test_nonfinite_engine_score_rejected():
+    with pytest.raises(ValueError, match="finite"):
+        _extract_score_lead({"rootInfo": {"scoreLead": float("nan")}})

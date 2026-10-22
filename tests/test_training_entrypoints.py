@@ -71,8 +71,8 @@ def test_training_entrypoint_real_trainer(tmp_path, monkeypatch, script, config_
     monkeypatch.setattr(module, "write_run_log", lambda *args, **kwargs: tmp_path / "log.json")
     if script != "run_sft":
         engine = SimpleNamespace(start=lambda: None, close=lambda: None,
-            analyze_position=lambda board: KataGoResult(0.5, {}, score_lead=0, best_move="PASS"),
-            analyze_positions=lambda boards: [KataGoResult(0.5, {}, score_lead=0) for _ in boards],
+            analyze_position=lambda board, **kwargs: KataGoResult(0.5, {}, score_lead=0, best_move="PASS"),
+            analyze_positions=lambda boards, **kwargs: [KataGoResult(0.5, {}, score_lead=0) for _ in boards],
             choose_move=lambda *args, **kwargs: "PASS")
         monkeypatch.setattr(module, "build_katago_service", lambda cfg: engine)
     config = yaml.safe_load((ROOT / "config" / config_name).read_text())

@@ -89,3 +89,22 @@ func TestParseSGFRejectsInvalidBoardSize(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSGFRejectsUnsupportedStateChanges(t *testing.T) {
+	for _, content := range []string{
+		"(;GM[2]SZ[5];B[aa])", "(;SZ[5]KM[NaN];B[aa])",
+		"(;SZ[5];B[aa];AB[bb];W[cc])", "(;SZ[5];B[aa]W[bb])",
+		"(;SZ[5]PL[Z];B[aa])", "(;SZ[5];B[aa];PL[B];B[bb])",
+	} {
+		if _, err := parseSGFFile(writeTempSGF(t, content)); err == nil {
+			t.Fatalf("accepted invalid state: %s", content)
+		}
+	}
+}
+
+func TestParseSGFRootMoveAndMissingKomi(t *testing.T) {
+	game, err := parseSGFFile(writeTempSGF(t, "(;SZ[5]B[aa];W[bb])"))
+	if err != nil || len(game.Moves) != 2 || game.Komi != nil {
+		t.Fatalf("root move lost or komi fabricated: %+v %v", game, err)
+	}
+}

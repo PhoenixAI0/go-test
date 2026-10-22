@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+import pytest
 
 
 def _load_script_module(filename: str, module_name: str):
@@ -120,3 +121,26 @@ def test_sft_generation_prefix_and_single_eos_are_preserved():
     boundary = len("board<think></think>")
     assert output["input_ids"] == tokenizer.encode("board<think></think>D4") + [0]
     assert output["completion_mask"] == [0] * boundary + [1, 1, 1]
+
+
+def test_modern_sft_inputs_preserve_rule_and_komi_context():
+    module = _load_script_module("run_sft.py", "sft_context_regression")
+    sample = module._convert_to_messages(
+        {"prompt": PROMPT, "response": "D4", "komi": 0.5, "rules": "Chinese"},
+        input_encoding="compact",
+    )
+    prompt = sample["prompt"][0]["content"]
+    assert "komi: 0.5" in prompt
+    assert "rules: koSIMPLEscoreAREAtaxNONEsui0" in prompt
+    assert "columns: ABCDEFGHJ" in prompt
+    with pytest.raises(ValueError, match="explicit komi and rules"):
+        module._convert_to_messages({"prompt": PROMPT, "response": "D4"}, input_encoding="grid")
+
+
+def test_sft_rejects_truncated_move_and_eos_targets():
+    module = _load_script_module("run_sft.py", "sft_complete_target_regression")
+    example = {"input_ids": [1, 2, 3, 4, 5], "completion_mask": [0, 0, 1, 1, 1]}
+    assert not module._has_complete_supervision(example, max_seq_length=4)
+    assert module._has_complete_supervision(example, max_seq_length=5)
+    example["completion_mask"] = [0] * 5
+    assert not module._has_complete_supervision(example, max_seq_length=5)

@@ -1,333 +1,276 @@
-# Go RL Training Utilities
+# Learning full-size Go with Qwen
 
-This repo provides Go RL data prep, prompting utilities, and training entry points
-for SFT and GRPO using KataGo-based rewards. Dataset parsing is handled by the Go
-`sgf_parser` tool.
+This repository trains and evaluates language-model Go policies on **19×19 boards**.
+The current starting point is **Qwen3-0.6B**, teacher-labeled positions, and short
+controlled experiments before expensive training. The direct recipe pins model
+revision `c1899de289a04d12100db370d81485cdf75e47ca`.
 
-**Repo layout**
-- `go_rl/` core Python library.
-- `go_parser/` Go SGF parser (builds a `sgf_parser` binary).
-- `scripts/` setup, data prep, training, evaluation, and utilities.
-- `config/` training YAML configs, plus `config/accelerate/` for multi-GPU.
-- `data/` SGF inputs and generated JSONL datasets.
-- `outputs/` model checkpoints.
-- `logs/` run logs.
-- `tests/` pytest suite.
+The implementation supports complete games, exact supported-rule legality, and
+independent KataGo evaluation. That does **not** mean the small experimental
+checkpoints are strong players. Read [experiment results](PLAN/EXPERIMENT_RESULTS_2026.md)
+for measured improvements, negative results, budgets, and remaining uncertainty.
+Use the [experiment protocol](docs/EXPERIMENT_PROTOCOL.md) for a stepwise handoff
+covering frozen final data, controlled sweeps, full games, and learner-state refresh.
+The older 9×9 → 19×19 CUDA curriculum remains documented in
+[Legacy curriculum](docs/LEGACY_CURRICULUM.md).
 
-## Run the entire training curriculum on CUDA
+## Install
 
-The same command supports **DGX Spark (Linux aarch64)** and **conventional NVIDIA
-GPUs on Linux x86_64 / WSL2**. Setup selects the locked packages automatically:
-
-| Host | PyTorch | CUDA runtime | KataGo evaluator |
-| --- | --- | --- | --- |
-| DGX Spark / aarch64 | 2.9.1 | 13.0 | Native Eigen CPU build |
-| x86_64 NVIDIA machine | 2.9.1 | 12.8 | Native Eigen CPU build |
-
-Use a compatible NVIDIA driver; Spark's CUDA 13 runtime requires driver 580 or
-newer. CUDA runtime libraries come with the Python packages; a separately installed
-CUDA toolkit is not needed. Setup checks actual attention backward and optimizer
-kernels, and the launcher additionally tests the selected quantization kernels.
-
-On either platform, run from the repository root:
+Use Python 3.12 or 3.13; the locked setup uses 3.12. Run from the repository root:
 
 ```bash
-./scripts/run_full_pipeline.sh
-```
-
-This installs the locked Python 3.12 environment, installs Go if needed, builds
-SGF datasets, checks CUDA and KataGo analysis, and trains these stages in order.
-If either SGF directory is empty, it automatically downloads real games from the
-[KataGo bulk archive](https://katagoarchive.org/kata1/traininggames/index.html),
-verifies the archive checksum, validates the SGFs, and separates 9x9 and 19x19 games.
-Existing games in `data/sgf_9x9/` and `data/sgf_19x19/` are reused.
-
-The training stages are:
-
-1. 9x9 supervised warm start.
-2. 9x9 position GRPO, loading the SFT adapter.
-3. 19x19 position GRPO, loading the 9x9 adapter.
-4. 19x19 full-game GRPO, loading the 19x19 adapter.
-
-Defaults use `Qwen/Qwen3-8B`, 4-bit LoRA, gradient checkpointing, a per-device
-training batch of one, and non-thinking move completions. The model is downloaded
-from Hugging Face on first use. GPU memory needs depend on the model and sequence
-length; use `--model MODEL_ID` to select a smaller compatible model if needed.
-
-To check installation and one training update per stage without supplying games:
-
-```bash
-./scripts/run_full_pipeline.sh --smoke --model Qwen/Qwen3-0.6B
-```
-
-Smoke mode generates tiny synthetic SGFs in its own run directory. These fixtures
-are only for testing the pipeline, not training a useful player. Smoke runs still
-load the selected model and require a CUDA GPU.
-
-Useful options:
-
-```bash
-./scripts/run_full_pipeline.sh --dry-run              # No installation or GPU needed
-./scripts/run_full_pipeline.sh --skip-setup           # Reuse the installed environment
-./scripts/run_full_pipeline.sh --sgf-9x9 /games/9 --sgf-19x19 /games/19
-./scripts/run_full_pipeline.sh --skip-fullgame        # Stop after position GRPO
-./scripts/run_full_pipeline.sh --no-download-data     # Require existing local SGFs
-./scripts/run_full_pipeline.sh --download-games 1000  # Cap imported games per board size
-CUDA_VISIBLE_DEVICES=1 ./scripts/run_full_pipeline.sh --skip-setup
-./scripts/run_full_pipeline.sh --quantization-bits 16 --optimizer adamw  # BF16/FP16 LoRA
-```
-
-Each run writes its datasets, resolved configs, logs, and adapters under a new
-`outputs/cuda_TIMESTAMP/` directory (`outputs/smoke_TIMESTAMP/` for smoke mode).
-Use `--output-dir PATH` to choose an empty destination. The final adapter is in
-`grpo_fullgame_19x19/`, or `grpo_19x19/` with `--skip-fullgame`. A failed stage stops
-the pipeline; it does not train subsequent stages from stale checkpoints. This
-launcher starts fresh runs, not optimizer-state resumes.
-
-Setup uses KataGo's CPU Eigen build to reserve GPU memory for the language model
-and avoid a separate CUDA/cuDNN installation for the evaluator. CPU evaluation
-can make full-game training slow. Existing `KATAGO_BIN` and `KATAGO_MODEL` settings
-in `.env` are preserved, so an installed GPU KataGo can also be used. The launcher
-sources `.env` automatically. Both platforms build KataGo from pinned source with CMake,
-Eigen3 and zlib. Setup installs missing build packages automatically on Debian/Ubuntu
-when running as root or with passwordless sudo. Otherwise install them once:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y build-essential cmake libeigen3-dev zlib1g-dev
-```
-
-Standard Linux runtime libraries (including libgomp) and network access for initial
-downloads are required. When moving a checkout between machines, recreate `.venv`
-and remove stale machine-specific KataGo paths from `.env`. Keep your SGFs and
-checkpoints. Architecture-specific KataGo installs are stored separately.
-
-Training uses Transformers, PEFT and TRL on both platforms, with SDPA attention and
-bitsandbytes NF4 by default. It no longer depends on Unsloth, custom FlashAttention
-builds, or vLLM. Remove the obsolete `grpo_mini_batch`,
-`grpo_logit_chunk_multiplier`, `rollout.stop_at_pass`, `reward.length_penalty` and
-`full_game.max_seed_prefix_moves` keys from custom configs. Legacy FP8/dynamic-4bit
-flags are no longer accepted. `--quantization-bits 16 --optimizer adamw` uses
-BF16 where supported and FP16 otherwise; it needs more memory than 4-bit LoRA.
-The whole-curriculum launcher uses one GPU. Individual stage scripts support DDP;
-it does not orchestrate a cluster of linked Sparks.
-
-The default data source is the pinned `2025-01-01sgfs.tar.bz2` public self-play
-archive (about 21 MiB compressed). Up to 10,000 games per size are imported;
-the default import contains 461 9x9 games and 10,000 19x19 games. This is a
-starter corpus, so the resulting 9x9 dataset may be smaller than `--max-positions`.
-The games include varied rules and komi. The current prompts represent board
-positions and side to move; GRPO evaluation uses the configured Chinese rules
-and 7.5 komi. Use your own curated SGFs for a larger or rule-specific SFT corpus.
-The Go parser stops a game before an illegal move under its training legality checks.
-
-Downloads are cached in `data/downloads/` (override with `--data-cache`). Each
-installed corpus includes `source.json` with its source, SHA-256, and file list;
-the run's `run.json` records data provenance. Completed imports are reused and
-interrupted downloads/imports never appear as complete datasets. Downloads fail
-explicitly on network or checksum errors. Smoke mode continues to use synthetic
-fixtures and never downloads the game archive.
-
-`train_cuda.sh` is a compatibility alias for `run_full_pipeline.sh`; both accept
-all the same options. W&B is off unless `--wandb` is supplied; use
-`--wandb-project NAME` to select the project.
-
-Match evaluation and promotion gates run when `--model-command-template` (or
-`MODEL_GTP_COMMAND_TEMPLATE` in the environment or `.env`) is supplied. The template
-must contain `{MODEL_DIR}` and may use `{BOARD_SIZE}` (for example, `9x9`). Quote
-`{MODEL_DIR}` within the command if your output path contains spaces. Supply your
-own GTP engine command; the repository does not bundle a model GTP engine.
-`--no-eval` disables evaluations and gates even when a template is configured.
-A failed 9x9 gate stops the run; a failed 19x19 gate skips full-game training and
-keeps the 19x19 position adapter as the final model. Smoke evaluations use at most
-eight games. Evaluation logs and SGFs default to the run directory.
-
-Use `--upload-to-hub --hf-repo-id user/repo` to publish the final adapter after
-training and any enabled evaluations. Add `--hf-private` for a private repository.
-`--skip-data --data-dir PATH` reuses prepared `sft_9x9.jsonl`,
-`rl_prompts_9x9.jsonl`, and `rl_prompts_19x19.jsonl` without downloading SGFs.
-`--skip-sft --model PATH` starts GRPO from an existing adapter or model and does
-not require the SFT dataset. These options still create a fresh output directory.
-
-## Validation
-
-```bash
-uv run --locked pytest -m "not katago"
-```
-
-`uv` installs the `dev` dependency group (pytest, ruff) by default.
-
-The suite includes actual one-step TRL/PEFT training and adapter saves using a tiny
-local CPU model, using the production loader and checking adapter weights after
-reload. Only KataGo is substituted in these trainer tests. Both Linux dependency
-plans have been resolved, but CUDA execution needs verification on the target
-hardware: run `./scripts/run_full_pipeline.sh --smoke --model Qwen/Qwen3-0.6B` on each
-machine before a full run. KataGo integration tests
-require the paths from `.env` (`set -a; source .env; set +a`).
-
-The integrations follow the pinned [TRL 0.24 trainer APIs](https://huggingface.co/docs/trl/v0.24.0/grpo_trainer),
-[PyTorch 2.9 ARM/CUDA support](https://pytorch.org/blog/pytorch-2-9/),
-[bitsandbytes 0.49.2 platform matrix](https://github.com/bitsandbytes-foundation/bitsandbytes/blob/0.49.2/docs/source/installation.mdx),
-and [KataGo analysis protocol](https://github.com/lightvector/KataGo/blob/v1.15.3/docs/Analysis_Engine.md).
-
-## Manual Setup
-
-Requirements:
-- Python 3.12 or 3.13 (the launcher uses 3.12)
-- NVIDIA GPU with CUDA for training (setup script is optimized for Linux)
-- KataGo binary + model + config (the setup script creates `.env` with paths)
-
-Manual install with `uv`:
-```bash
-uv venv .venv --python 3.12
-uv sync --locked
-```
-
-(`uv run ...` uses the project `.venv` automatically, so manual activation is optional.)
-
-## Data Preparation
-
-Expected SGF directories:
-- `data/sgf_9x9/`
-- `data/sgf_19x19/`
-
-Download real games separately (no GPU needed after installing the Python environment):
-
-```bash
-uv run python scripts/download_sgf.py --download --board-size 9
-uv run python scripts/download_sgf.py --download --board-size 19
-```
-
-Dataset helpers:
-```bash
-uv run python scripts/prepare_datasets.py --sgf-dir data/sgf_9x9 --output-dir data --tag 9x9
-uv run python scripts/prepare_datasets.py --sgf-dir data/sgf_19x19 --output-dir data --tag 19x19
-```
-
-Individual builders:
-```bash
-uv run python scripts/build_sft_dataset.py --sgf-dir data/sgf_9x9 --output data/sft_9x9.jsonl
-uv run python scripts/build_rl_prompts.py --sgf-dir data/sgf_9x9 --output data/rl_prompts_9x9.jsonl
-```
-
-Manual Go parser compile:
-```bash
+uv sync --locked --python 3.12
 ./scripts/compile_go_parser.sh
 ```
 
-SGF download and validation helpers:
+The direct experimental runners accept `--device auto|cuda|mps|cpu`; the bounded
+Qwen experiments were exercised on Apple MPS. CPU supports tests and tiny models.
+For Linux NVIDIA setup, use `./scripts/setup_environment.sh`; the existing x86_64
+and aarch64 package choices, system prerequisites, and CUDA smoke checks are in
+the [legacy setup guide](docs/LEGACY_CURRICULUM.md#run-the-entire-training-curriculum-on-cuda).
+Validate CUDA execution on the target machine before a long run.
+
+Teacher generation and evaluation need a working KataGo binary and network:
+
 ```bash
-./scripts/download_sample_sgf.sh --board-size 9x9
-uv run python scripts/download_sgf.py --manual-instructions --board-size 9
-uv run python scripts/download_sgf.py --validate-only --board-size 9
+export KATAGO_BIN=/absolute/path/to/katago
+export KATAGO_MODEL=/absolute/path/to/network.bin.gz
 ```
 
-## Training
+Linux setup writes these paths to `.env`. To use that file with Python commands,
+export its values using `set -a; source .env; set +a`. The direct recipe reads the
+exported environment; it does not source shell files. Analysis and GTP use separate
+configs in `config/`. Teacher network hashes, engine versions, and visit budgets
+are recorded so a cheap teacher is never confused with a stronger evaluation.
 
-Shell wrappers (recommended):
+## Prepare real 19×19 positions
+
+Import the checksum-pinned public KataGo archive, or put your own SGFs in the same
+directory. Preserve a separate final-test corpus before repeated model selection.
+
 ```bash
-./scripts/train_sft.sh --board-size 9x9
-./scripts/train_grpo.sh --board-size 9x9
-./scripts/train_grpo_fullgame.sh --smoke --fullgame-smoke-plies 20
+uv run python scripts/download_sgf.py --download --board-size 19 --max-games 10000
+uv run python scripts/prepare_datasets.py \
+  --sgf-dir data/sgf_19x19 --output-dir data --tag 19x19 \
+  --max-positions 200000 --positions-per-game 64 \
+  --eval-ratio 0.05 --seed 3407
 ```
 
-Common flags:
-- `--smoke` for short sanity runs.
-- `--wandb` and `--wandb-project` for W&B logging.
-- `--debug` for verbose logs.
-- `--gradient-checkpointing` for memory savings.
-- `--multi-gpu 2|4|8|auto` for DDP via `accelerate`.
-- SFT now logs train/val loss and perplexity to W&B (validation split controlled by `eval_split_ratio` and `eval_steps` in SFT config).
+The downloader reuses an existing nonempty SGF directory; increasing `--max-games`
+does not expand an earlier small import. For a larger fresh corpus, pass a new
+`--output-dir` to the downloader and that same directory to `--sgf-dir`. Keep its
+`katago_2025_01_01/source.json`: it records the archive URL/SHA-256 and selected
+content-hashed SGF filenames. Dataset preparation records the parser-output hash,
+split seed and validation game IDs; training records the exact input JSONL hashes.
+Retain these manifests with the original SGFs so the source selection can be rebuilt.
 
-Direct Python entry points:
+The parser preserves semantic `game_id`, source provenance, rules, komi, setup
+stones, and move history. Sampling spans games rather than taking only opening
+prefixes. `prepare_datasets.py` writes `sft_19x19.jsonl`, separate train/validation
+files, training-only RL prompts, and a dataset manifest. Whole games are assigned
+to one split before optional D4 augmentation; experimental trainers also reject
+visible-state overlap up to symmetry. Do not use random row splits.
+
+Audit selected training coverage from the empty board through opening, middlegame,
+endgame, and passing. The recipe includes move zero, but `game-phase` sampling alone
+does not guarantee enough empty-board or early-opening examples. An earlier model
+trained without the first ten plies passed on 34 of 35 Black turns in a real game;
+validation beginning later in games missed that failure. Before a long run, inspect
+phase counts and use an explicit opening quota when needed. The bounded research
+helper [prepare_opening_budget.py](scripts/prepare_opening_budget.py) freezes 512
+positions with 64 opening states (including up to eight real empty-board states)
+and 448 later states, excludes held-out games/states, and records source hashes.
+Its fixed budget is an experimental example to adapt, not a tuned production ratio.
+
+The source games have varied objectives. Teacher generation replays each history,
+rejects histories incompatible with the requested rules, and reanalyzes under a
+fixed target: **positional superko, area scoring, no suicide, komi 7.5**. Source
+outcomes are retained as provenance, not reused as labels for that new objective.
+The named KataGo ruleset `chinese` uses simple ko and is not an alias for this target.
+
+## Direct training recipe
+
+Inspect [config/policy_19x19_qwen06.yaml](config/policy_19x19_qwen06.yaml), then print
+the exact commands. Dry-run loads no models, starts no engines, and writes nothing:
+
 ```bash
-uv run python scripts/run_sft.py --config config/sft_warm_start.yaml
-uv run python scripts/run_sft.py --config config/sft_warm_start_19x19.yaml
-uv run python scripts/run_grpo.py --config config/grpo_9x9.yaml
-uv run python scripts/run_grpo.py --config config/grpo_19x19.yaml
-uv run python scripts/run_grpo_fullgame.py --config config/grpo_fullgame_19x19.yaml
+uv run python scripts/train_19x19.py --dry-run --smoke \
+  --output-dir outputs/qwen06_smoke
 ```
 
-### Four-stage curriculum
-1. SFT warm start on SGF data.
-2. GRPO 9x9 (move-level reward shaping).
-3. GRPO 19x19 curriculum stage.
-4. Full-game GRPO 19x19 vs KataGo (interactive rollouts, margin + terminal outcome reward).
+Execute the same bounded integration check on real positions:
 
-Both GRPO stages score only the final answer (after any reasoning block), and it
-must be exactly one move in the SFT format, such as `D4` or `PASS`. Lowercase,
-punctuation, a preamble or extra text is a format error that earns the illegal-move
-penalty: the policy learns the format from the reward rather than from a lenient
-parser.
-
-The full-game stage is gated by `promotion_gate_fullgame` in `config/grpo_19x19.yaml`.
-Default gate: winrate >= 0.55 over 200 evaluation games.
-
-Multi-GPU helpers:
 ```bash
-uv run python scripts/check_gpu_setup.py
-uv run python scripts/validate_multi_gpu.py --verbose
+uv run python scripts/train_19x19.py --smoke \
+  --output-dir outputs/qwen06_smoke
 ```
 
-## Evaluation
+This creates up to eight training and four validation teacher positions and runs
+two updates. It is an integration check, not a useful training budget. Every run
+requires a fresh output path and records resolved commands, input/code hashes,
+stage logs, a reusable `recipe.yaml`, and a completion/failure manifest. Reusing
+labeled data is supported:
 
-Create a match config and run evaluation:
+```bash
+uv run python scripts/train_19x19.py --smoke \
+  --train-data data/teacher_train.jsonl --eval-data data/teacher_validation.jsonl \
+  --output-dir outputs/qwen06_reuse_smoke
+```
+
+To build teacher files independently:
+
+```bash
+uv run python scripts/build_teacher_dataset.py \
+  --dataset data/sft_19x19.jsonl --split train \
+  --output data/teacher_train.jsonl --max-positions 32768 \
+  --positions-per-game 32 --sampling game-phase --min-move 0 --max-visits 32 --prior-mix 0.5 \
+  --relabel-rules koPOSITIONALscoreAREAtaxNONEsui0 --relabel-komi 7.5 \
+  --katago-config config/katago_analysis_train.cfg
+uv run python scripts/build_teacher_dataset.py \
+  --dataset data/sft_19x19.jsonl --split validation \
+  --output data/teacher_validation.jsonl --max-positions 512 \
+  --positions-per-game 32 --sampling game-phase --min-move 0 --max-visits 32 --prior-mix 0.5 \
+  --relabel-rules koPOSITIONALscoreAREAtaxNONEsui0 --relabel-komi 7.5 \
+  --katago-config config/katago_analysis_train.cfg
+```
+
+The longer starting recipe uses up to 32,768 teacher positions and 2,000 updates
+at effective batch 32. These are **unvalidated starting budgets**, not tuned
+optima; the long run is left to the operator:
+
+```bash
+uv run python scripts/train_19x19.py --output-dir outputs/qwen06_19x19
+```
+
+Default `train_kind: text` uses compact board inputs and completion-only LoRA SFT.
+It is a provisional choice based on small move-quality experiments. Select the
+categorical ablation with `--train-kind categorical`; it uses a 362-action
+policy/value head and experimental cell readout with bidirectional attention.
+`--encoding` overrides the selected input representation. Compare alternatives at
+matched data and compute; text-token NLL and categorical policy CE are not directly
+comparable. Both trainers save `distill/best`, `distill/final`, metrics, and periodic
+`distill/checkpoint-XXXXXXXX/` snapshots.
+
+Source histories and D4 augmentation stream into `prepared_train.jsonl` and
+`prepared_validation.jsonl` caches. Training keeps compact row offsets in memory
+and reads token/target records as sampled; it does not retain eight copies of every
+game history. Allow disk space for these derived caches, especially for D4 runs.
+
+Resume the same planned schedule, data, hyperparameters, and device type into a
+fresh directory; `--steps` in the YAML remains the original total budget:
+
+```bash
+uv run python scripts/train_19x19.py \
+  --config outputs/qwen06_19x19/recipe.yaml \
+  --train-data outputs/qwen06_19x19/teacher_train.jsonl \
+  --eval-data outputs/qwen06_19x19/teacher_validation.jsonl \
+  --resume-from outputs/qwen06_19x19/distill/checkpoint-00000500 \
+  --output-dir outputs/qwen06_19x19_resumed
+```
+
+The checkpoint includes optimizer, scheduler, sampling RNG, and device RNG state
+bound to the saved model files. It also preserves the earlier best model, so
+resuming does not discard a better checkpoint from before the interruption.
+A compatible snapshot without that copy reports best selection over the
+continuation segment only. Resume also verifies prepared-data hashes and the
+evaluation schedule. Older trainer-contract versions, changed schedules, or new
+objectives require `--init-checkpoint PATH` and a fresh optimizer. The recipe
+defaults to saving every 500 updates.
+
+## Model interface and evaluation
+
+Inputs contain the current board, side to play, normalized rules, komi, and recent
+moves. Full history stays in the verifier for ko/superko; the model is never fed a
+silently truncated board. Text output is exactly one GTP coordinate or `PASS`.
+Legal-token decoding constrains syntax and legality, while the model still chooses
+the move. Greedy decoding selects the best next token at each prefix. Text engines
+also accept `--num-beams 4` or `8`, ranking candidate complete move strings by raw
+model log-probability including EOS, without a length penalty. Finite beam search
+is approximate; neither interface is exact global conditioning over legal strings.
+Categorical policies instead emit one masked action distribution.
+
+The bundled GTP engine serves either checkpoint type:
+
+```bash
+uv run python scripts/model_gtp.py \
+  --model outputs/qwen06_19x19/distill/best --encoding compact
+# Categorical: replace --model with --checkpoint and omit --encoding.
+```
+
+Evaluate move quality on held-out positions using a fixed-budget engine, including
+uniform and fresh-search references:
+
+```bash
+uv run python scripts/eval_move_quality.py \
+  --dataset outputs/qwen06_19x19/teacher_validation.jsonl \
+  --train-data outputs/qwen06_19x19/teacher_train.jsonl \
+  --text-model qwen=outputs/qwen06_19x19/distill/best --encoding compact \
+  --max-positions 128 --max-visits 64 \
+  --katago-config config/katago_analysis_eval.cfg \
+  --output logs/qwen06_move_quality.json
+# Categorical: use --policy-checkpoint qwen=PATH instead of --text-model.
+# Text decoding ablation: add --text-beam-widths 1 4 8 for shared engine estimates.
+```
+
+These are approximate teacher estimates with game-cluster uncertainty, not exact
+regret or Elo. Imitation agreement and legality alone do not measure playing strength.
+Use actual games for that assessment:
+
 ```bash
 uv run python scripts/create_match_config.py \
-  --output config/match_9x9.cfg \
-  --board-size 9 \
-  --num-games 200 \
-  --model-command "/path/to/your_gtp_engine --model outputs/grpo_9x9"
-
-uv run python scripts/eval_elo.py --match-config config/match_9x9.cfg
+  --output config/qwen06_match.json --board-size 19 --num-games 20 \
+  --rules koPOSITIONALscoreAREAtaxNONEsui0 --komi 7.5 \
+  --model-command 'uv run python scripts/model_gtp.py --model outputs/qwen06_19x19/distill/best --encoding compact'
+uv run python scripts/eval_elo.py --match-config config/qwen06_match.json \
+  --log-file logs/qwen06_matches.log --summary-json logs/qwen06_matches.json
 ```
 
-`eval_elo.py` referees GTP games between your engine and `katago gtp` (KataGo's own
-`match` command only plays KataGo networks). Colors alternate, moves are checked
-with suicide and simple-ko rules, and an illegal move or an exhausted byo-yomi
-clock loses. KataGo scores games that end with two passes or reach the move cap
-(three moves per board point). One SGF per game is written to the SGF directory,
-and engine stderr goes to the match log. The baseline uses
-`config/katago_gtp_eval.cfg` (100 visits); set `KATAGO_GTP_CONFIG` or pass
-`--katago-config` to use another KataGo GTP config.
+Colors alternate. The trusted engine validates moves and scores two-pass endings;
+illegal actions, resignation, and clock failures are explicit outcomes. Capped
+games are `RE[Void]`, excluded from scored win rates/Elo, and reported with cap
+rates. A few games or games against one weak opponent cannot establish a robust
+rating. Add `--evaluate` to the training recipe to run both diagnostics and matches
+automatically; smoke caps remain integration-only outcomes.
 
-`eval_elo.py` can also write structured metrics and log to W&B:
+## RL and iterative improvement
+
+`run_grpo.py` supports explicit GRPO-family objective and sampling choices. The
+legacy `run_grpo_fullgame.py` assigns a continuation reward to the initial text
+completion; it does **not** optimize every later action. Its engine potential is
+an estimate, and truncation is not a terminal win.
+
+`run_policy_rl.py` is a separate categorical self-play PPO path. It trains all
+collected decisions with actual behavior probabilities, alternating-player value
+signs, and final outcomes from a KataGo GTP referee. Caps bootstrap from the next
+value estimate rather than inventing a winner. Use
+`train_19x19.py --train-kind categorical --selfplay` to append it; text models cannot
+silently enter this trainer. Text GRPO remains a separately configured experiment.
+
+`scripts/export_learner_positions.py` exports learner-visited states for fresh
+teacher annotation and another distillation round, excluding declared holdouts.
+Learner actions are provenance, not expert targets. Track this loop against a
+fixed holdout and independent full-game opponents before scaling it. Keep the
+final-test games unused until model and checkpoint selection are frozen.
+
+## Tests and research records
+
 ```bash
-uv run python scripts/eval_elo.py \
-  --match-config config/match_9x9.cfg \
-  --summary-json logs/matches/match_9x9_summary.json \
-  --wandb --wandb-project go-rl
+uv run --locked pytest -m 'not katago'
+uv run --locked pytest -m katago  # Requires exported KataGo paths.
+(cd go_parser && go test ./...)
 ```
 
-## Upload to Hugging Face Hub
+Tests include actual tiny Qwen/TRL/PEFT training, legal-action and history checks,
+checkpoint reload/continuation, reward perspectives, dataset isolation, and GTP
+contracts. Real 0.6B experiment outcomes are recorded separately from unit tests.
 
-Upload a trained model or LoRA adapter:
-```bash
-uv run python scripts/upload_to_hub.py --model outputs/grpo_9x9 --repo-id username/go-rl-9x9-grpo --board-size 9 --push-only
-```
+- [Experiment results](PLAN/EXPERIMENT_RESULTS_2026.md) and [experiment journal](autoresearch.jsonl).
+- [RL and verifiable-reward papers](PLAN/RL_RESEARCH_2026.md).
+- [Model interfaces and representation papers](PLAN/MODEL_INTERFACE_RESEARCH_2026.md).
+- [Data and distillation papers](PLAN/DATA_RESEARCH_2026.md).
+- [Go engine correctness](PLAN/GO_ENGINE_RESEARCH_2026.md).
+- [Legacy CUDA curriculum, multi-GPU wrappers, and upload commands](docs/LEGACY_CURRICULUM.md).
 
-## Tests
-
-Run the full test suite:
-```bash
-uv run pytest
-```
-
-Skip KataGo integration tests:
-```bash
-uv run pytest -m "not katago"
-```
-
-Run only KataGo integration tests (requires `.env`):
-```bash
-uv run pytest -m katago
-```
-
-## Outputs and Logs
-
-- Model outputs are stored under `outputs/`.
-  - Includes `outputs/grpo_fullgame_19x19/` when step-4 full-game training runs.
-- Run logs are stored under `logs/`.
-- Datasets are written to `data/`.
-
-These folders are generated artifacts and should not be committed unless explicitly requested.
+`go_rl/` contains the library, `go_parser/` the SGF parser, `scripts/` entry points,
+`config/` recipes, and `tests/` validation. Generated data, checkpoints, and logs
+belong under `data/`, `outputs/`, and `logs/` and stay out of version control.

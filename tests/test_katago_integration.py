@@ -179,3 +179,52 @@ def test_katago_result_structure(mock_katago_client, sample_board_9x9):
 
     assert isinstance(result.winrate, float)
     assert isinstance(result.raw, dict)
+
+
+@pytest.mark.katago
+def test_fullsize_legal_masks_match_real_katago(skip_if_no_katago, real_katago_config):
+    import random
+    from go_rl.board import coords_to_gtp
+
+    rng = random.Random(404)
+    board = BoardState.empty(19)
+    samples = []
+    for ply in range(321):
+        if ply in {0, 20, 80, 160, 240, 320}:
+            samples.append(board.clone())
+        legal = board.legal_moves(superko=True, include_pass=False)
+        board.apply_move(board.next_player(), rng.choice(legal) if legal else "PASS", strict=True)
+    client = KataGoAnalysisClient(real_katago_config)
+    try:
+        client.start()
+        analyses = client.analyze_positions(samples, max_visits=1, include_policy=True,
+                                            rules="koPOSITIONALscoreAREAtaxNONEsui0", komi=7.5)
+        for position, analysis in zip(samples, analyses):
+            oracle = {coords_to_gtp(divmod(index, 19), 19) if index < 361 else "PASS"
+                      for index, probability in enumerate(analysis.raw["policy"]) if probability >= 0}
+            assert oracle == set(position.legal_moves(superko=True)), len(position.moves)
+    finally:
+        client.close()
+
+
+@pytest.mark.katago
+def test_snapshot_ko_ban_reaches_real_katago(skip_if_no_katago, real_katago_config):
+    board = BoardState.empty(19)
+    for color, move in [("B", "B3"), ("B", "D3"), ("B", "C4"),
+                        ("W", "C3"), ("W", "B2"), ("W", "C1"), ("W", "D2")]:
+        board.apply_move(color, move, strict=True)
+    previous = board.current_board()
+    board.apply_move("B", "C2", strict=True)
+    snapshot = BoardState.from_matrix(19, board.current_board(), "W", previous)
+    client = KataGoAnalysisClient(real_katago_config)
+    try:
+        client.start()
+        original, restored = client.analyze_positions([board, snapshot], max_visits=1,
+                                                       include_policy=True)
+        recapture_action = (19 - 3) * 19 + 2  # C3, row-major from A19.
+        assert original.raw["policy"][recapture_action] == -1
+        assert restored.raw["policy"][recapture_action] == -1
+        assert [value >= 0 for value in original.raw["policy"]] == [
+            value >= 0 for value in restored.raw["policy"]]
+    finally:
+        client.close()

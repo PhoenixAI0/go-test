@@ -1,0 +1,82 @@
+# Direct full-size Go research recipe. Budgets are starting points, not tuned optima.
+# Run --dry-run first. --smoke overrides budgets for an integration check.
+# Inspect: uv run python scripts/train_19x19.py --dry-run
+# Reuse labels: uv run python scripts/train_19x19.py --train-data data/teacher_train.jsonl --eval-data data/teacher_validation.jsonl --output-dir outputs/my_run --smoke
+# Categorical/PPO ablation: add --train-kind categorical --selfplay.
+# Add --evaluate for bounded move diagnostics and paired-color full-game matches.
+# Resume into a FRESH output directory with --resume-from PATH and the same explicit
+# --train-data/--eval-data. --init-checkpoint PATH starts a new optimizer instead.
+# Remove --smoke for the budgets below; these longer runs are intended for the user.
+board_size: 19
+train_kind: text  # Provisional: stronger small-sample move-quality evidence than categorical heads.
+model: Qwen/Qwen3-0.6B
+revision: c1899de289a04d12100db370d81485cdf75e47ca
+dataset: data/sft_19x19.jsonl
+train_data: null  # Set BOTH paths to reuse already labeled teacher records.
+eval_data: null
+resume_from: null
+init_checkpoint: null
+output_dir: outputs/policy_19x19_qwen06
+device: auto
+seed: 3407
+rules: koPOSITIONALscoreAREAtaxNONEsui0
+komi: 7.5
+katago:
+  binary: ${KATAGO_BIN}
+  model: ${KATAGO_MODEL}
+  analysis_config: config/katago_analysis_train.cfg
+  eval_config: config/katago_analysis_eval.cfg
+  gtp_config: config/katago_gtp_eval.cfg
+teacher:
+  train_positions: 32768
+  eval_positions: 512
+  positions_per_game: 32
+  min_move: 0  # Include empty-board/opening eligibility; audit actual phase coverage before long runs.
+  max_move: null  # Keep endgame and passing positions.
+  sampling: game-phase
+  max_visits: 32
+  prior_mix: 0.5
+  batch_size: 8
+training:
+  steps: 2000
+  batch_size: 8
+  gradient_accumulation: 4
+  eval_every: 100
+  checkpoint_every: 500
+  learning_rate: 0.0001
+  lora_rank: 16
+  lora_alpha: 32
+  max_seq_length: 1024
+text_training:
+  encoding: compact
+  symmetries: 1
+  generation_positions: 32
+  max_new_tokens: 16
+categorical_training:
+  # Experimental architecture: lower imitation CE has not established match strength.
+  encoding: cells
+  readout: cells
+  attention: bidirectional
+  head_init_std: 0.001
+  symmetries: 1  # Eight-way augmentation is a separate, explicit ablation.
+  target: policy
+  head_learning_rate: 0.001
+  value_weight: 0.25
+selfplay:
+  # Only supported for train_kind=categorical. Text GRPO is a separate workflow.
+  enabled: false
+  updates: 100
+  episodes_per_update: 4
+  max_plies: 1083
+  minibatch_size: 8
+  ppo_epochs: 2
+  learning_rate: 0.00001
+evaluation:
+  enabled: false
+  max_positions: 128
+  max_visits: 64
+  num_games: 20
+  max_moves: 1083
+  main_time: 300
+  byoyomi_time: 10
+  byoyomi_periods: 5

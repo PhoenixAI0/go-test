@@ -110,6 +110,25 @@ def test_simulate_full_game_two_pass_termination():
     assert result.pass_terminated is True
     assert result.model_turns >= 1
     assert result.plies_played == 2
+    assert result.final_outcome is None
+    assert result.terminal_reward == 0.0
+    assert result.outcome_source == "katago_estimate"
+
+
+@pytest.mark.parametrize("continue_after_endpoint", [False, True])
+def test_fullgame_rejects_root_at_or_past_two_pass_endpoint(continue_after_endpoint):
+    board = BoardState.empty(19)
+    board.apply_move("B", "PASS")
+    board.apply_move("W", "PASS")
+    if continue_after_endpoint:
+        board.apply_move("B", "D4")
+    before = list(board.moves)
+    with pytest.raises(ValueError, match="root must precede"):
+        simulate_full_game(
+            board=board, initial_completion="PASS", model=_DummyModel(), tokenizer=_DummyTokenizer(),
+            katago=object(), reward_cfg=RewardConfig(), rollout_cfg=RolloutConfig(),
+            fullgame_cfg=FullGameConfig(), model_color=board.next_player())
+    assert board.moves == before
 
 
 def test_simulate_full_game_rejects_mismatched_model_turn():
@@ -147,6 +166,9 @@ def test_simulate_full_game_truncates_on_max_plies():
 
     assert result.truncated is True
     assert result.plies_played == 1
+    assert result.final_outcome is None
+    assert result.terminal_reward == 0.0
+    assert result.estimated_outcome == 1.0
 
 
 def test_simulate_full_game_illegal_move_ends_game():
@@ -317,6 +339,7 @@ def test_generation_uses_cache_and_restores_training_mode(monkeypatch, fail):
         def generate(self, **kwargs):
             assert not self.training
             assert kwargs["use_cache"] is True
+            assert kwargs["top_k"] == 0
             # Thinking controls belong to the chat template; generate rejects them.
             assert "enable_thinking" not in kwargs
             assert not torch.is_grad_enabled()
@@ -392,3 +415,71 @@ def test_simulate_full_game_requires_bare_move_answer(completion, illegal):
         model_color="B",
     )
     assert result.terminated_by_illegal is illegal
+
+
+def test_endpoint_reward_includes_opponent_reply_and_only_two_analyses():
+    class ChangingKataGo(_StubKataGo):
+        def __init__(self):
+            super().__init__(move="Q16")
+            self.analysis_plies = []
+
+        def analyze_position(self, board):
+            self.analysis_plies.append(len(board.moves))
+            # The opponent reply changes the endpoint substantially.
+            lead = {0: 1.0, 1: -4.0, 2: 3.0}[len(board.moves)]
+            return KataGoResult(winrate=0.5, raw={}, score_lead=lead)
+
+    katago = ChangingKataGo()
+    result = simulate_full_game(
+        board=BoardState.empty(19), initial_completion="D4",
+        model=_DummyModel(), tokenizer=_DummyTokenizer(), katago=katago,
+        reward_cfg=RewardConfig(scorelead_scale=0.5, legal_bonus=0.0),
+        rollout_cfg=RolloutConfig(), fullgame_cfg=FullGameConfig(max_plies=2),
+        model_color="B",
+    )
+    assert result.scorelead_delta_sum == 2.0
+    assert result.scorelead_reward == 1.0
+    assert result.total_reward == 1.0
+    assert katago.analysis_plies == [0, 2]
+    assert result.terminal_reward == 0.0
+
+
+def test_continuation_length_does_not_multiply_legal_bonus(monkeypatch):
+    monkeypatch.setattr("go_rl.fullgame_rollout.generate_model_move", lambda **_: "PASS")
+    result = simulate_full_game(
+        board=BoardState.empty(19), initial_completion="D4",
+        model=_DummyModel(), tokenizer=_DummyTokenizer(),
+        katago=_StubKataGo(move="PASS"),
+        reward_cfg=RewardConfig(legal_bonus=0.2), rollout_cfg=RolloutConfig(),
+        fullgame_cfg=FullGameConfig(max_plies=20), model_color="B",
+    )
+    assert result.model_turns == 2
+    assert result.legality_reward_total == 0.2
+    assert result.final_outcome is None
+
+
+def test_pass_termination_includes_pass_before_seed():
+    board = BoardState.empty(19)
+    board.apply_move("B", "PASS")
+    result = simulate_full_game(
+        board=board, initial_completion="PASS", model=_DummyModel(),
+        tokenizer=_DummyTokenizer(), katago=_StubKataGo(move="Q16"),
+        reward_cfg=RewardConfig(), rollout_cfg=RolloutConfig(),
+        fullgame_cfg=FullGameConfig(), model_color="W",
+    )
+    assert result.pass_terminated
+    assert result.plies_played == 1
+
+
+def test_missing_engine_score_is_not_silently_zero():
+    class MissingScore(_StubKataGo):
+        def analyze_position(self, board):
+            return KataGoResult(winrate=0.5, raw={})
+
+    with pytest.raises(RuntimeError, match="scoreLead"):
+        simulate_full_game(
+            board=BoardState.empty(19), initial_completion="D4",
+            model=_DummyModel(), tokenizer=_DummyTokenizer(), katago=MissingScore(),
+            reward_cfg=RewardConfig(), rollout_cfg=RolloutConfig(),
+            fullgame_cfg=FullGameConfig(max_plies=1), model_color="B",
+        )

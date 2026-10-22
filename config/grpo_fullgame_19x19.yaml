@@ -18,7 +18,7 @@ training:
   reasoning:
     enabled: true
     profile: auto
-    optimize_final_only: true
+    optimize_final_only: false
     malformed_policy: mask_all
     qwen_enable_thinking: false
     gpt_oss_reasoning_effort: medium
@@ -34,7 +34,7 @@ katago:
   komi: 7.5
 reward:
   winrate_scale: 0.0
-  legal_bonus: 0.2
+  legal_bonus: 0.0
   illegal_penalty: -1.0
   full_game_bonus: 0.0
   scorelead_scale: 0.02
@@ -44,7 +44,8 @@ reward:
 rollout:
   num_samples: 8
   temperature: 0.8
-  top_p: 0.9
+  top_p: 1.0
+  top_k: 0
   max_tokens: 16
 full_game:
   enabled: true
@@ -54,3 +55,15 @@ full_game:
   model_color_mode: alternate
   seed_empty_board_prob: 0.4
   max_model_turns: 150
+
+# Explicit objective baseline; compare alternatives at matched compute.
+grpo:
+  loss_type: dr_grpo
+  scale_rewards: none
+  beta: 0.0
+  epsilon: 0.2
+  epsilon_high: 0.28
+  num_iterations: 1
+  importance_sampling_level: token
+  mask_truncated_completions: false
+  top_entropy_quantile: 1.0

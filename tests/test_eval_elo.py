@@ -137,3 +137,52 @@ def test_summarize_match_results_requires_new_sgfs_with_baseline(tmp_path):
             model_name="TestModel",
             baseline_sgf_stats=baseline,
         )
+
+
+def test_void_and_unknown_games_are_not_draws(tmp_path):
+    module = _load_eval_module()
+    for index, result in enumerate(["B+R", "Void", "?", "garbage", "0"]):
+        comment = "C[termination=move_cap]" if result == "Void" else ""
+        (tmp_path / f"{index}.sgf").write_text(
+            f"(;PB[Model]PW[KataGo]RE[{result}]{comment})")
+    summary = module.summarize_match_results(str(tmp_path), "Model")
+    assert summary["identified_games"] == 2
+    assert summary["wins"] == 1 and summary["draws"] == 1
+    assert summary["void_games"] == 2 and summary["skipped_games"] == 1
+    assert summary["capped_games"] == 1 and summary["cap_rate"] == 0.25
+    assert summary["score_rate"] == 0.75
+
+
+def test_all_capped_games_report_missing_strength_metrics(tmp_path):
+    module = _load_eval_module()
+    (tmp_path / "capped.sgf").write_text(
+        "(;PB[Model]PW[KataGo]RE[Void]C[termination=move_cap])")
+    summary = module.summarize_match_results(str(tmp_path), "Model")
+    assert summary["identified_games"] == 0
+    assert summary["capped_games"] == 1 and summary["cap_rate"] == 1.0
+    assert summary["win_rate"] is None and summary["elo_delta"] is None
+
+
+def test_malformed_winning_prefix_does_not_become_a_win(tmp_path):
+    module = _load_eval_module()
+    for index, result in enumerate(["B+nan", "W+-1", "B+", "B+garbage", "W+1.5"]):
+        (tmp_path / f"{index}.sgf").write_text(f"(;PB[Model]PW[KataGo]RE[{result}])")
+    summary = module.summarize_match_results(str(tmp_path), "Model")
+    assert summary["identified_games"] == 1
+    assert summary["wins"] == 0 and summary["losses"] == 1
+    assert summary["skipped_games"] == 4
+    assert summary["elo_delta"] is None  # One loss cannot give a finite Elo MLE.
+
+
+def test_match_summary_parses_escaped_names_and_does_not_mix_opponents(tmp_path):
+    module = _load_eval_module()
+    from go_rl.gtp_match import GameRecord, MatchConfig, PlayerConfig, game_to_sgf
+
+    model_name = "Qwen ] \\ model"
+    config = MatchConfig(19, 1, PlayerConfig(model_name, "unused"), PlayerConfig("KataGo", "unused"))
+    for index, (opponent, result) in enumerate([("KataGo", "W+1.5"), ("OtherEngine", "B+R")]):
+        record = GameRecord(model_name, opponent, [], result)
+        (tmp_path / f"{index}.sgf").write_text(game_to_sgf(record, config))
+    summary = module.summarize_match_results(str(tmp_path), model_name, katago_name="KataGo")
+    assert summary["identified_games"] == 1
+    assert summary["losses"] == 1 and summary["wins"] == 0 and summary["skipped_games"] == 1

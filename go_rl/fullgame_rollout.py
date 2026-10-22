@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional
@@ -8,7 +9,8 @@ from typing import Optional
 from .board import BoardState
 from .config import FullGameConfig, ReasoningConfig, RewardConfig, RolloutConfig
 from .katago import KataGoResult
-from .prompting import build_generation_inputs, build_prompt
+from .prompting import build_generation_inputs
+from .model_interface import render_position
 from .reasoning import (
     build_chat_template_kwargs,
     detect_reasoning_profile,
@@ -16,7 +18,7 @@ from .reasoning import (
 )
 from .rewards import is_legal_move, legality_reward
 from .rollout import parse_move_answer
-from .shared_types import BoardKey, KataGoService, board_key
+from .shared_types import KataGoService, board_key
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +35,12 @@ class FullGameEpisodeResult:
     pass_terminated: bool
     model_color: str
     scorelead_delta_sum: float
-    final_outcome: float
+    # Only a verified result (currently an illegal-action forfeit) is terminal.
+    # A KataGo score estimate at a two-pass or capped endpoint is not a win.
+    final_outcome: Optional[float]
     katago_fallback_passes: int
+    estimated_outcome: Optional[float] = None
+    outcome_source: str = "unverified"
 
 
 def scorelead_from_model_perspective(score_lead: Optional[float], model_color: str) -> float:
@@ -82,6 +88,9 @@ def generate_model_move(
     rollout_cfg: RolloutConfig,
     reasoning_profile: str,
     chat_template_kwargs: dict[str, object] | None = None,
+    rules: str | dict[str, object] | None = None,
+    komi: float | None = None,
+    input_encoding: str = "compact",
 ) -> str:
     """Generate one model move from the current board prompt.
 
@@ -93,7 +102,8 @@ def generate_model_move(
         logger.debug("Torch is unavailable during move generation; defaulting to PASS")
         return "PASS"
 
-    prompt = build_prompt(board)
+    prompt = render_position(board, input_encoding, rules=rules if rules is not None else "chinese",
+                             komi=komi if komi is not None else 7.5)
     inputs = build_generation_inputs(
         tokenizer=tokenizer,
         prompt=prompt,
@@ -107,6 +117,7 @@ def generate_model_move(
         "do_sample": True,
         "temperature": rollout_cfg.temperature,
         "top_p": rollout_cfg.top_p,
+        "top_k": rollout_cfg.top_k,
         "pad_token_id": getattr(tokenizer, "eos_token_id", None),
         "use_cache": True,
     }
@@ -152,11 +163,21 @@ def simulate_full_game(
     model_color: str,
     reasoning_cfg: ReasoningConfig | None = None,
     reasoning_model_name: str = "",
-    analysis_cache: Optional[OrderedDict[BoardKey, KataGoResult]] = None,
+    analysis_cache: Optional[OrderedDict[tuple, KataGoResult]] = None,
     max_cache_size: Optional[int] = None,
+    rules: str | dict[str, object] | None = None,
+    komi: float | None = None,
+    input_encoding: str = "compact",
 ) -> FullGameEpisodeResult:
-    """Run one interactive game continuation and return a scalar reward breakdown."""
+    """Estimate the value of the first move with a sampled continuation.
+
+    Only ``initial_completion`` is optimized by the caller's GRPO loss. Later
+    model turns estimate that action's value; they are not training examples.
+    This is root-action rollout optimization, not full-trajectory policy RL.
+    """
     model_color = model_color.upper()
+    if fullgame_cfg.termination_two_passes and board.has_two_pass_history():
+        raise ValueError("Fullgame rollout root must precede the two-pass endpoint")
     if board.next_player() != model_color:
         raise ValueError(
             f"Board to-move ({board.next_player()}) does not match model_color ({model_color})."
@@ -170,26 +191,33 @@ def simulate_full_game(
         configured_profile=getattr(reasoning_cfg, "profile", "plain"),
     )
     chat_template_kwargs = build_chat_template_kwargs(reasoning_cfg, reasoning_profile)
+    initial_board = board.clone()
 
     scorelead_delta_sum = 0.0
     legality_total = 0.0
     model_turns = 0
     plies_played = 0
-    consecutive_passes = 0
+    consecutive_passes = board.consecutive_passes()
     truncated = False
     terminated_by_illegal = False
     pass_terminated = False
     katago_fallback_passes = 0
+    analysis_options = {}
+    if rules is not None:
+        analysis_options["rules"] = rules
+    if komi is not None:
+        analysis_options["komi"] = komi
+    options_key = json.dumps(analysis_options, sort_keys=True)
 
     def _analyze_position(current_board: BoardState) -> KataGoResult:
         if analysis_cache is None:
-            return katago.analyze_position(current_board)
-        key = board_key(current_board)
+            return katago.analyze_position(current_board, **analysis_options)
+        key = (board_key(current_board), options_key)
         cached = analysis_cache.get(key)
         if cached is not None:
             analysis_cache.move_to_end(key)
             return cached
-        result = katago.analyze_position(current_board)
+        result = katago.analyze_position(current_board, **analysis_options)
         analysis_cache[key] = result
         if max_cache_size is not None and max_cache_size > 0:
             while len(analysis_cache) > max_cache_size:
@@ -207,24 +235,23 @@ def simulate_full_game(
         return fullgame_cfg.termination_two_passes and consecutive_passes >= 2
 
     def _play_model_turn(move_text: str) -> None:
-        nonlocal scorelead_delta_sum
         nonlocal legality_total
         nonlocal model_turns
         nonlocal plies_played
         nonlocal terminated_by_illegal
 
-        before = board.clone()
         applied = _apply_if_legal(board, model_color, move_text, reward_cfg)
-        legality_total += legality_reward(applied, reward_cfg)
+        # Reward legal formatting once, at the action actually being optimized.
+        # A bonus at every turn would pay up to 30 points for surviving a loss,
+        # overwhelming the former +/-1 outcome term.
+        if not applied or model_turns == 0:
+            legality_total += legality_reward(applied, reward_cfg)
         model_turns += 1
         if not applied:
             # Otherwise the model retries from the same position on its next turn.
             terminated_by_illegal = reward_cfg.illegal_move_ends_game
             return
 
-        pre_lead = scorelead_from_model_perspective(_analyze_position(before).score_lead, model_color)
-        post_lead = scorelead_from_model_perspective(_analyze_position(board).score_lead, model_color)
-        scorelead_delta_sum += post_lead - pre_lead
         _record_pass(move_text)
         plies_played += 1
 
@@ -244,7 +271,7 @@ def simulate_full_game(
 
         # Opponent (KataGo) turn.
         if board.next_player() == opponent_color:
-            opponent_move = katago.choose_move(board, player=opponent_color)
+            opponent_move = katago.choose_move(board, player=opponent_color, **analysis_options)
             if not is_legal_move(board, opponent_color, opponent_move, reward_cfg):
                 opponent_move = "PASS"
                 katago_fallback_passes += 1
@@ -267,23 +294,34 @@ def simulate_full_game(
                 rollout_cfg=rollout_cfg,
                 reasoning_profile=reasoning_profile,
                 chat_template_kwargs=chat_template_kwargs,
+                input_encoding=input_encoding,
+                **analysis_options,
             )
             _play_model_turn(generated_move)
 
+    final_outcome: Optional[float] = None
+    estimated_outcome: Optional[float] = None
+    outcome_source = "katago_estimate"
     if terminated_by_illegal:
         final_outcome = -1.0
+        outcome_source = "illegal_action_forfeit"
+    elif reward_cfg.scorelead_scale != 0:
+        initial_lead = _analyze_position(initial_board).score_lead
+        final_lead = _analyze_position(board).score_lead
+        if initial_lead is None or final_lead is None:
+            raise RuntimeError("Endpoint score reward requires KataGo scoreLead values.")
+        initial_value = scorelead_from_model_perspective(initial_lead, model_color)
+        final_value = scorelead_from_model_perspective(final_lead, model_color)
+        # Include every transition, including the opponent's replies. This is
+        # Phi(endpoint)-Phi(root), not a sum of model-only local blunder losses.
+        # At a rollout cap it remains a bootstrap estimate, not a verified win.
+        scorelead_delta_sum = final_value - initial_value
+        estimated_outcome = float((final_value > 0) - (final_value < 0))
     else:
-        final_position = _analyze_position(board)
-        final_lead = scorelead_from_model_perspective(final_position.score_lead, model_color)
-        if final_lead > 0:
-            final_outcome = 1.0
-        elif final_lead < 0:
-            final_outcome = -1.0
-        else:
-            final_outcome = 0.0
+        outcome_source = "unverified"
 
     scorelead_reward = reward_cfg.scorelead_scale * scorelead_delta_sum
-    terminal_reward = reward_cfg.terminal_outcome_bonus * final_outcome
+    terminal_reward = reward_cfg.terminal_outcome_bonus * (final_outcome or 0.0)
     total_reward = scorelead_reward + terminal_reward + legality_total
     return FullGameEpisodeResult(
         total_reward=total_reward,
@@ -299,4 +337,6 @@ def simulate_full_game(
         scorelead_delta_sum=scorelead_delta_sum,
         final_outcome=final_outcome,
         katago_fallback_passes=katago_fallback_passes,
+        estimated_outcome=estimated_outcome,
+        outcome_source=outcome_source,
     )

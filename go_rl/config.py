@@ -55,6 +55,58 @@ class RolloutConfig:
     temperature: float = 1.0
     top_p: float = 0.9
     max_tokens: int = 4
+    # Disable top-k truncation so sampling matches the temperature-softmax
+    # log probabilities used by the policy-gradient objective.
+    top_k: int = 0
+
+    def __post_init__(self) -> None:
+        if self.num_samples < 1:
+            raise ValueError("num_samples must be >= 1.")
+        if not math.isfinite(self.temperature) or self.temperature <= 0:
+            raise ValueError("temperature must be finite and positive.")
+        if not 0 < self.top_p <= 1:
+            raise ValueError("top_p must be in (0, 1].")
+        if self.top_k < 0:
+            raise ValueError("top_k must be nonnegative.")
+        if self.max_tokens < 1:
+            raise ValueError("max_tokens must be >= 1.")
+
+
+@dataclass
+class GRPOObjectiveConfig:
+    """Explicit, reproducible TRL objective settings (top-level ``grpo`` YAML).
+
+    Dr. GRPO removes per-response length and per-group variance weighting.
+    These are baseline choices to ablate, not a claim of optimal Go strength.
+    """
+
+    loss_type: str = "dr_grpo"
+    scale_rewards: str = "none"
+    beta: float = 0.0
+    epsilon: float = 0.2
+    epsilon_high: float = 0.28
+    num_iterations: int = 1
+    importance_sampling_level: str = "token"
+    mask_truncated_completions: bool = False
+    top_entropy_quantile: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.loss_type not in {"grpo", "dapo", "bnpo", "dr_grpo"}:
+            raise ValueError("loss_type must be grpo, dapo, bnpo, or dr_grpo.")
+        if self.scale_rewards not in {"group", "batch", "none"}:
+            raise ValueError("scale_rewards must be group, batch, or none.")
+        if self.importance_sampling_level not in {"token", "sequence"}:
+            raise ValueError("importance_sampling_level must be token or sequence.")
+        if not math.isfinite(self.beta) or self.beta < 0:
+            raise ValueError("beta must be finite and nonnegative.")
+        if not math.isfinite(self.epsilon) or not 0 <= self.epsilon < 1:
+            raise ValueError("epsilon must be finite and in [0, 1).")
+        if not math.isfinite(self.epsilon_high) or self.epsilon_high < 0:
+            raise ValueError("epsilon_high must be finite and nonnegative.")
+        if self.num_iterations < 1:
+            raise ValueError("num_iterations must be >= 1.")
+        if not 0 < self.top_entropy_quantile <= 1:
+            raise ValueError("top_entropy_quantile must be in (0, 1].")
 
 
 @dataclass
@@ -98,7 +150,9 @@ class RewardConfig:
 class ReasoningConfig:
     enabled: bool = True
     profile: str = "auto"
-    optimize_final_only: bool = True
+    # A sampled reasoning prefix is part of the policy action and needs credit
+    # from the same outcome reward. Final-only optimization is an ablation.
+    optimize_final_only: bool = False
     malformed_policy: str = "mask_all"
     qwen_enable_thinking: bool = True
     gpt_oss_reasoning_effort: str = "medium"
@@ -123,6 +177,7 @@ class ReasoningConfig:
 class TrainingConfig:
     model_name: str
     output_dir: str
+    input_encoding: str = "compact"
     log_dir: str = "logs/grpo"
     max_seq_length: int = 2048
     batch_size: int = 1
@@ -139,6 +194,8 @@ class TrainingConfig:
     reasoning: ReasoningConfig = field(default_factory=ReasoningConfig)
 
     def __post_init__(self) -> None:
+        if self.input_encoding not in {"legacy", "grid", "compact", "stones"}:
+            raise ValueError("input_encoding must be legacy, grid, compact, or stones.")
         self.learning_rate = float(self.learning_rate)
         if not math.isfinite(self.learning_rate) or self.learning_rate <= 0:
             raise ValueError("learning_rate must be a finite positive number.")
@@ -171,6 +228,7 @@ class SftConfig:
     seed: int = 3407
     eval_split_ratio: float = 0.05
     eval_steps: int = 200
+    input_encoding: str = "legacy"
     reasoning: ReasoningConfig = field(default_factory=ReasoningConfig)
 
     def __post_init__(self) -> None:
@@ -190,6 +248,8 @@ class SftConfig:
             raise ValueError("eval_split_ratio must be in [0.0, 1.0).")
         if self.eval_steps < 1:
             raise ValueError("eval_steps must be >= 1.")
+        if self.input_encoding not in {"legacy", "grid", "compact", "stones"}:
+            raise ValueError("input_encoding must be legacy, grid, compact, or stones.")
 
 
 def load_yaml_mapping(

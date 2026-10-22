@@ -1,0 +1,4 @@
+(;GM[1]FF[4]CA[UTF-8]SZ[19]KM[7.5]RU[koPOSITIONALscoreAREAtaxNONEsui0]PL[B]
+C[Raw-board area counts the two corner White stones and A19 as White. KataGo 1.18.2 pass-alive scoring assigns this three-point corner to Black after two passes. Diagnostic difference: six points.]
+AB[ca][ea][ga][bb][cb][db][eb][fb][gb][ac][bc]AW[ba][ab]
+;B[];W[])

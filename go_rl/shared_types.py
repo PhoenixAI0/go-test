@@ -13,6 +13,7 @@ BoardKey: TypeAlias = tuple[
     int, str, tuple[tuple[int, ...], ...],
     tuple[tuple[str, tuple[int, int] | None], ...],
     tuple[tuple[int, ...], ...] | None,
+    tuple[tuple[int, ...], ...] | None,
 ]
 
 
@@ -23,12 +24,21 @@ class KataGoRootInfo(TypedDict, total=False):
 
 class KataGoMoveInfo(TypedDict, total=False):
     move: str
+    order: int
+    visits: int
+    edgeVisits: int
+    prior: float
+    winrate: float
+    scoreLead: float
+    pv: list[str]
 
 
 class KataGoResponse(TypedDict, total=False):
     id: str
     rootInfo: KataGoRootInfo
     moveInfos: list[KataGoMoveInfo]
+    policy: list[float]
+    ownership: list[float]
 
 
 class GpuInfo(TypedDict, total=False):
@@ -65,11 +75,22 @@ class KataGoService(Protocol):
 
     def close(self) -> None: ...
 
-    def analyze_position(self, board: BoardState) -> "KataGoResult": ...
+    def analyze_position(
+        self, board: BoardState, *, max_visits: int | None = None,
+        include_policy: bool = False, include_ownership: bool = False,
+        rules: str | dict[str, object] | None = None, komi: float | None = None,
+    ) -> "KataGoResult": ...
 
-    def analyze_positions(self, boards: Iterable[BoardState]) -> list["KataGoResult"]: ...
+    def analyze_positions(
+        self, boards: Iterable[BoardState], *, max_visits: int | None = None,
+        include_policy: bool = False, include_ownership: bool = False,
+        rules: str | dict[str, object] | None = None, komi: float | None = None,
+    ) -> list["KataGoResult"]: ...
 
-    def choose_move(self, board: BoardState, player: str | None = None) -> str: ...
+    def choose_move(
+        self, board: BoardState, player: str | None = None, *,
+        rules: str | dict[str, object] | None = None, komi: float | None = None,
+    ) -> str: ...
 
 
 def board_key(board: BoardState) -> BoardKey:
@@ -80,4 +101,6 @@ def board_key(board: BoardState) -> BoardKey:
         tuple(board.moves),  # Identical stones can have different ko/pass history.
         (tuple(tuple(row) for row in board.previous_board_snapshot)
          if board.previous_board_snapshot is not None else None),
+        (tuple(tuple(row) for row in board.board_snapshot)
+         if board.board_snapshot is not None else None),
     )

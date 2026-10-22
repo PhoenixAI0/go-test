@@ -15,14 +15,15 @@ import sys
 from pathlib import Path
 from typing import TypedDict
 
+from sgfmill import sgf
+
 from go_rl.gtp_match import MatchConfig, run_match
+from go_rl.game_result import parse_game_result
 from go_rl.wandb_utils import configure_wandb, finish_wandb, log_training_metrics
 from venv_utils import ensure_virtualenv
 
 
-_RESULT_PATTERN = re.compile(r"RE\[([^\]]*)\]")
-_BLACK_PATTERN = re.compile(r"PB\[([^\]]*)\]")
-_WHITE_PATTERN = re.compile(r"PW\[([^\]]*)\]")
+_CAP_COMMENT = re.compile(r"(?:^|\s)termination=move_cap(?:\s|$)")
 
 
 class MatchSummary(TypedDict):
@@ -36,9 +37,12 @@ class MatchSummary(TypedDict):
     losses: int
     draws: int
     skipped_games: int
-    win_rate: float
-    score_rate: float
-    elo_delta: float
+    void_games: int
+    capped_games: int
+    cap_rate: float
+    win_rate: float | None
+    score_rate: float | None
+    elo_delta: float | None
 
 
 def _snapshot_sgf_files(sgf_dir: Path) -> dict[str, tuple[int, int, int]]:
@@ -58,17 +62,19 @@ def _snapshot_sgf_files(sgf_dir: Path) -> dict[str, tuple[int, int, int]]:
 
 
 def _extract_winner_color(result: str) -> str | None:
-    normalized = result.strip().upper()
-    if normalized.startswith("B+"):
-        return "B"
-    if normalized.startswith("W+"):
-        return "W"
-    return None
+    try:
+        _, black_outcome = parse_game_result(result)
+    except ValueError:
+        return None
+    return "B" if black_outcome > 0 else "W" if black_outcome < 0 else None
 
 
-def _safe_elo_from_score(score_rate: float) -> float:
-    clipped = min(max(score_rate, 1e-6), 1 - 1e-6)
-    return 400.0 * math.log10(clipped / (1.0 - clipped))
+def _safe_elo_from_score(score_rate: float) -> float | None:
+    # All-win/all-loss samples have no finite maximum-likelihood Elo estimate.
+    # Clipping them to an arbitrary epsilon fabricates a precise-looking number.
+    if not 0 < score_rate < 1:
+        return None
+    return 400.0 * math.log10(score_rate / (1.0 - score_rate))
 
 
 def summarize_match_results(
@@ -105,31 +111,44 @@ def summarize_match_results(
     losses = 0
     draws = 0
     skipped = 0
+    void_games = 0
+    capped_games = 0
 
     for sgf_file in sgf_files:
-        content = sgf_file.read_text(encoding="utf-8", errors="ignore")
-        black_match = _BLACK_PATTERN.search(content)
-        white_match = _WHITE_PATTERN.search(content)
-        result_match = _RESULT_PATTERN.search(content)
-        if not black_match or not white_match or not result_match:
+        try:
+            root = sgf.Sgf_game.from_bytes(sgf_file.read_bytes()).get_root()
+            black_name = root.get("PB").strip()
+            white_name = root.get("PW").strip()
+            result = root.get("RE").strip()
+            comment = root.get("C") if root.has_property("C") else ""
+        except (ValueError, KeyError, UnicodeError):
             skipped += 1
             continue
-
-        black_name = black_match.group(1).strip()
-        white_name = white_match.group(1).strip()
-        result = result_match.group(1).strip()
         winner = _extract_winner_color(result)
 
+        if (black_name == model_name) == (white_name == model_name):
+            skipped += 1
+            continue
         if black_name == model_name:
             model_color = "B"
-        elif white_name == model_name:
-            model_color = "W"
+            opponent_name = white_name
         else:
+            model_color = "W"
+            opponent_name = black_name
+        if katago_name is not None and opponent_name != katago_name:
             skipped += 1
             continue
 
         if winner is None:
-            draws += 1
+            normalized = result.upper()
+            if normalized in {"0", "DRAW", "JIGO"}:
+                draws += 1
+            elif normalized in {"VOID", "?"}:
+                void_games += 1
+                if _CAP_COMMENT.search(comment):
+                    capped_games += 1
+            else:
+                skipped += 1
             continue
         if winner == model_color:
             wins += 1
@@ -137,13 +156,13 @@ def summarize_match_results(
             losses += 1
 
     identified_games = wins + losses + draws
-    if identified_games == 0:
+    if identified_games + void_games == 0:
         raise RuntimeError(
             "Could not identify any games containing the configured model name in SGFs."
         )
 
-    win_rate = wins / identified_games
-    score_rate = (wins + 0.5 * draws) / identified_games
+    win_rate = wins / identified_games if identified_games else None
+    score_rate = (wins + 0.5 * draws) / identified_games if identified_games else None
     summary = {
         "model_name": model_name,
         "katago_name": katago_name,
@@ -155,9 +174,12 @@ def summarize_match_results(
         "losses": losses,
         "draws": draws,
         "skipped_games": skipped,
+        "void_games": void_games,
+        "capped_games": capped_games,
+        "cap_rate": capped_games / (identified_games + void_games),
         "win_rate": win_rate,
         "score_rate": score_rate,
-        "elo_delta": _safe_elo_from_score(score_rate),
+        "elo_delta": _safe_elo_from_score(score_rate) if score_rate is not None else None,
     }
     return summary
 
@@ -236,12 +258,13 @@ def main() -> None:
         )
         print(
             "Summary: "
-            f"win_rate={summary['win_rate']:.4f}, "
-            f"score_rate={summary['score_rate']:.4f}, "
-            f"elo_delta={summary['elo_delta']:.2f}, "
+            f"win_rate={summary['win_rate']}, "
+            f"score_rate={summary['score_rate']}, "
+            f"elo_delta={summary['elo_delta']}, "
             f"wins={summary['wins']}, "
             f"losses={summary['losses']}, "
-            f"draws={summary['draws']}"
+            f"draws={summary['draws']}, "
+            f"capped_games={summary['capped_games']}"
         )
 
         if args.summary_json:
@@ -263,11 +286,14 @@ def main() -> None:
                 f"{prefix}/losses": summary["losses"],
                 f"{prefix}/draws": summary["draws"],
                 f"{prefix}/identified_games": summary["identified_games"],
+                f"{prefix}/void_games": summary["void_games"],
+                f"{prefix}/capped_games": summary["capped_games"],
+                f"{prefix}/cap_rate": summary["cap_rate"],
                 f"{prefix}/total_sgf_files": summary["total_sgf_files"],
                 f"{prefix}/skipped_games": summary["skipped_games"],
                 f"{prefix}/stale_sgf_files_ignored": summary["stale_sgf_files_ignored"],
             }
-            log_training_metrics(step=0, metrics=metrics)
+            log_training_metrics(step=0, metrics={key: value for key, value in metrics.items() if value is not None})
     except (OSError, RuntimeError) as exc:
         print(f"\nError: Match failed: {exc}", file=sys.stderr)
         print(f"Check the log file for details: {log_file}", file=sys.stderr)

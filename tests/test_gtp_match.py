@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from go_rl.gtp_match import GtpEngine, MatchConfig, PlayerConfig, _Clock, run_match
+from go_rl.gtp_match import GtpEngine, GtpError, MatchConfig, PlayerConfig, _Clock, run_match
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,6 +21,7 @@ parser.add_argument("--moves", default="")
 parser.add_argument("--final-score", default="0")
 parser.add_argument("--sleep", type=float, default=0.0)
 parser.add_argument("--reject-play", action="store_true")
+parser.add_argument("--reject-rules", action="store_true")
 parser.add_argument("--log")
 args = parser.parse_args()
 moves = iter([move for move in args.moves.split(",") if move])
@@ -40,6 +41,8 @@ for line in sys.stdin:
         print("? illegal move\n", flush=True)
     elif name == "final_score":
         print(f"= {args.final_score}\n", flush=True)
+    elif name == "kata-set-rules":
+        print("? unsupported rules\n" if args.reject_rules else "=\n", flush=True)
     elif name.startswith("kata") or name.startswith("kgs") or name == "time_left":
         print("? unknown command\n", flush=True)
     else:
@@ -92,6 +95,23 @@ def test_match_alternates_colors_scores_with_katago_and_writes_sgfs(tmp_path, en
     assert (summary["wins"], summary["losses"]) == (1, 1)
 
 
+def test_match_must_not_silently_use_different_rules(tmp_path, engine):
+    with pytest.raises(GtpError, match="unsupported rules"):
+        _play(tmp_path, _config(engine("--reject-rules"), engine()))
+    assert not list((tmp_path / "sgf").glob("*.sgf"))
+
+
+@pytest.mark.parametrize("result", ["B+nan", "W+-3", "B+", "Void"])
+def test_invalid_referee_score_is_void_not_a_win(tmp_path, engine, result):
+    (sgf,) = _play(tmp_path, _config(engine(), engine("--final-score", result)))
+    assert "RE[Void]C[termination=scoring_error]" in sgf
+
+
+def test_match_rejects_rules_the_local_board_cannot_verify(engine):
+    with pytest.raises(ValueError, match="suicide|ko"):
+        _config(engine(), engine(), rules="tromp-taylor")
+
+
 @pytest.mark.parametrize("moves,expected", [
     ("E5,E5", "W+F"),  # Replaying on an occupied point.
     ("Z99", "W+F"),  # Off the board.
@@ -119,11 +139,11 @@ def test_katago_rejection_forfeits_but_model_rejection_is_an_engine_error(tmp_pa
         _play(tmp_path, _config(engine("--reject-play"), engine("--moves", "E5")))
 
 
-def test_move_cap_ends_game_with_katago_score(tmp_path, engine):
+def test_move_cap_records_void_instead_of_adjudicated_win(tmp_path, engine):
     config = _config(engine("--moves", "E5,D4"), engine("--moves", "C3,F6", "--final-score", "B+3"),
                      max_moves=3)
     (sgf,) = _play(tmp_path, config)
-    assert sgf.endswith("RE[B+3];B[ee];W[cg];B[df])\n")
+    assert sgf.endswith("RE[Void]C[termination=move_cap];B[ee];W[cg];B[df])\n")
 
 
 def test_crashed_engine_is_reported(tmp_path):
@@ -179,3 +199,13 @@ def test_match_against_real_katago(tmp_path):
         result = game.split("RE[")[1].split("]")[0]
         # Both sides are strong engines: games end by scoring, never by forfeit.
         assert result[:2] in {"B+", "W+"} and result[2:] not in {"F", "T"}, game
+
+
+def test_genmove_gtp_failure_is_forfeit(tmp_path, engine):
+    broken = tmp_path / "cannot_generate.py"
+    broken.write_text(FAKE_ENGINE.replace(
+        'print(f"= {next(moves, \'pass\')}\\n", flush=True)',
+        'print("? no legal model output\\n", flush=True)'))
+    command = shlex.join([sys.executable, str(broken)])
+    (sgf,) = _play(tmp_path, _config(command, engine()))
+    assert "RE[W+F]" in sgf

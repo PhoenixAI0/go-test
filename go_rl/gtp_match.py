@@ -3,7 +3,8 @@
 KataGo's own `match` command only plays KataGo networks, so evaluation drives two
 GTP engines here. Moves are checked with the repository's strict rules (suicide
 and simple ko are illegal). An illegal move or an exhausted clock loses, and the
-trusted KataGo engine scores games that end by passing or reaching the move cap.
+trusted KataGo engine scores games that end by passing. A move cap truncates
+a game and is recorded as Void, never as a scored win.
 """
 from __future__ import annotations
 
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import IO, Callable, Optional
 
 from .board import BoardState, gtp_to_coords
+from .game_result import parse_game_result
+from .rules import legality_superko
 
 # Process scheduling and pipe latency are not charged to a player's clock.
 _GRACE_SECONDS = 10.0
@@ -53,6 +56,7 @@ class MatchConfig:
     def __post_init__(self) -> None:
         if self.board_size not in (9, 19):
             raise ValueError("board_size must be 9 or 19")
+        legality_superko(self.rules)  # Refuse rules the local referee cannot faithfully enforce.
         if self.num_games < 1:
             raise ValueError("num_games must be positive")
         if self.main_time < 0 or self.byoyomi_time < 0 or self.byoyomi_periods < 0:
@@ -63,6 +67,8 @@ class MatchConfig:
             raise ValueError("Both players need a GTP command")
         if self.model.name == self.katago.name:
             raise ValueError("Players need distinct names to attribute results")
+        if self.max_moves is not None and self.max_moves < 1:
+            raise ValueError("max_moves must be positive")
         if self.max_moves is None:
             # Generous for any finished game; stops two engines that never pass.
             self.max_moves = 3 * self.board_size * self.board_size
@@ -110,7 +116,9 @@ class GtpEngine:
         )
         self._lines: queue.Queue[str | None] = queue.Queue()
         # A reader thread gives every command a deadline, even if the engine hangs.
-        threading.Thread(target=self._read_stdout, daemon=True).start()
+        self._reader_thread = threading.Thread(target=self._read_stdout, daemon=True)
+        self._reader_thread.start()
+        self._closed = False
 
     def _read_stdout(self) -> None:
         assert self._process.stdout is not None
@@ -159,6 +167,9 @@ class GtpEngine:
             pass
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         try:
             self.send("quit", timeout=5)
         except (RuntimeError, TimeoutError):
@@ -173,6 +184,9 @@ class GtpEngine:
             self._process.stdin.close()
         except BrokenPipeError:
             pass
+        self._reader_thread.join(timeout=1)
+        if self._process.stdout is not None:
+            self._process.stdout.close()
 
 
 @dataclass
@@ -181,6 +195,7 @@ class GameRecord:
     white: str
     moves: list[tuple[str, str]]
     result: str
+    termination: str = "scored"
 
 
 def _other(color: str) -> str:
@@ -200,7 +215,7 @@ def play_game(
         engine.send(f"boardsize {config.board_size}")
         engine.send("clear_board")
         engine.send(f"komi {config.komi}")
-        engine.try_send(f"kata-set-rules {config.rules}")
+        engine.send(f"kata-set-rules {config.rules}")
         engine.try_send(f"kgs-time_settings byoyomi {int(config.main_time)} "
                         f"{int(config.byoyomi_time)} {config.byoyomi_periods}")
     clocks = {color: _Clock(config.main_time, config.byoyomi_time, config.byoyomi_periods)
@@ -208,10 +223,11 @@ def play_game(
     board = BoardState.empty(config.board_size)
     moves: list[tuple[str, str]] = []
     passes = 0
+    game_started = time.monotonic()
 
-    def finish(result: str) -> GameRecord:
-        log(f"{black.name} (B) vs {white.name} (W): {result} after {len(moves)} moves")
-        return GameRecord(black.name, white.name, moves, result)
+    def finish(result: str, termination: str = "scored") -> GameRecord:
+        log(f"{black.name} (B) vs {white.name} (W): {result} after {len(moves)} moves ({termination})")
+        return GameRecord(black.name, white.name, moves, result, termination)
 
     for ply in range(config.max_moves):
         color = "B" if ply % 2 == 0 else "W"
@@ -224,17 +240,20 @@ def play_game(
         try:
             reply = mover.send(f"genmove {color.lower()}", timeout=clock.deadline() + _GRACE_SECONDS)
         except TimeoutError:
-            return finish(f"{_other(color)}+T")
+            return finish(f"{_other(color)}+T", "timeout")
+        except GtpError as exc:
+            log(str(exc))
+            return finish(f"{_other(color)}+F", "generation_error")
         if not clock.spend(time.monotonic() - started):
-            return finish(f"{_other(color)}+T")
+            return finish(f"{_other(color)}+T", "timeout")
         move = reply.strip().upper()
         if move == "RESIGN":
-            return finish(f"{_other(color)}+R")
+            return finish(f"{_other(color)}+R", "resign")
         try:
             board.apply_move(color, move, strict=True)
         except ValueError:
             log(f"{mover.name} played illegal move {reply!r}")
-            return finish(f"{_other(color)}+F")
+            return finish(f"{_other(color)}+F", "illegal_move")
         try:
             opponent.send(f"play {color.lower()} {move}")
         except GtpError:
@@ -242,13 +261,21 @@ def play_game(
                 raise RuntimeError(f"{opponent.name} rejected legal move {color} {move}") from None
             # The trusted engine's rules (e.g. superko) can forbid what simple ko allows.
             log(f"{scorer.name} rejected {mover.name}'s move {move}")
-            return finish(f"{_other(color)}+F")
+            return finish(f"{_other(color)}+F", "referee_rejection")
         moves.append((color, move))
+        if len(moves) % 50 == 0:
+            log(f"{black.name} (B) vs {white.name} (W): {len(moves)} moves, "
+                f"last {color} {move}, {time.monotonic() - game_started:.1f}s elapsed")
         passes = passes + 1 if move == "PASS" else 0
         if passes == 2:
-            break
-    result = scorer.send("final_score").upper()
-    return finish("0" if result in {"0", "DRAW"} else result)
+            result = scorer.send("final_score")
+            try:
+                normalized, _ = parse_game_result(result)
+            except ValueError:
+                log(f"Referee returned an unscored final result: {result!r}")
+                return finish("Void", "scoring_error")
+            return finish(normalized)
+    return finish("Void", "move_cap")
 
 
 def _sgf_text(value: str) -> str:
@@ -261,9 +288,10 @@ def game_to_sgf(record: GameRecord, config: MatchConfig) -> str:
         coords = gtp_to_coords(move, config.board_size)
         point = "" if coords is None else chr(ord("a") + coords[1]) + chr(ord("a") + coords[0])
         nodes.append(f";{color}[{point}]")
+    comment = f"C[termination={_sgf_text(record.termination)}]" if record.termination != "scored" else ""
     return (f"(;GM[1]FF[4]CA[UTF-8]SZ[{config.board_size}]KM[{config.komi}]"
             f"RU[{_sgf_text(config.rules)}]PB[{_sgf_text(record.black)}]"
-            f"PW[{_sgf_text(record.white)}]RE[{_sgf_text(record.result)}]{''.join(nodes)})\n")
+            f"PW[{_sgf_text(record.white)}]RE[{_sgf_text(record.result)}]{comment}{''.join(nodes)})\n")
 
 
 def run_match(config: MatchConfig, sgf_dir: Path, log_file: Path) -> list[Path]:

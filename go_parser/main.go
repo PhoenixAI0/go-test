@@ -11,6 +11,8 @@ func main() {
 	outputFile := flag.String("output", "", "Output JSONL file")
 	maxPositions := flag.Int("max-positions", 200000, "Maximum positions to extract")
 	workers := flag.Int("workers", runtime.NumCPU(), "Number of parallel workers")
+	seed := flag.Int64("seed", 42, "Reproducible game shuffle and position sampling seed")
+	positionsPerGame := flag.Int("positions-per-game", 0, "Uniformly sample at most this many positions per game (0 = all)")
 	flag.Parse()
 
 	if *sgfDir == "" || *outputFile == "" {
@@ -20,7 +22,7 @@ func main() {
 	log.Printf("Scanning %s", *sgfDir)
 	log.Printf("Using %d workers", *workers)
 
-	count, err := buildDataset(*sgfDir, *outputFile, *maxPositions, *workers)
+	count, err := buildDatasetWithOptions(*sgfDir, *outputFile, *maxPositions, *workers, *seed, *positionsPerGame)
 	if err != nil {
 		log.Fatal(err)
 	}

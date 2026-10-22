@@ -18,7 +18,7 @@ training:
   reasoning:
     enabled: true
     profile: auto
-    optimize_final_only: true
+    optimize_final_only: false
     malformed_policy: mask_all
     qwen_enable_thinking: false
     gpt_oss_reasoning_effort: medium
@@ -41,7 +41,8 @@ reward:
 rollout:
   num_samples: 8
   temperature: 1.0
-  top_p: 0.9
+  top_p: 1.0
+  top_k: 0
   max_tokens: 16
 promotion_gate:
   metric: elo_delta_or_winrate
@@ -49,3 +50,15 @@ promotion_gate:
   threshold_winrate: 0.55
   evaluation_games: 200
   notes: Promote to 19x19 when either threshold is met on 9x9.
+
+# Explicit objective baseline; compare alternatives at matched compute.
+grpo:
+  loss_type: dr_grpo
+  scale_rewards: none
+  beta: 0.0
+  epsilon: 0.2
+  epsilon_high: 0.28
+  num_iterations: 1
+  importance_sampling_level: token
+  mask_truncated_completions: false
+  top_entropy_quantile: 1.0

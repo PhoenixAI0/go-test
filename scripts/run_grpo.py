@@ -7,9 +7,10 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable, Optional
 
-from go_rl.board import BoardState, gtp_to_coords
+from go_rl.board import gtp_to_coords
 from go_rl.config import (
     KataGoConfig,
+    GRPOObjectiveConfig,
     ReasoningConfig,
     RewardConfig,
     RolloutConfig,
@@ -21,12 +22,12 @@ from go_rl.config import (
 from go_rl.katago import KataGoResult
 from go_rl.katago_pool import build_katago_service
 from go_rl.logging_utils import setup_logging
-from go_rl.prompting import parse_prompt
 from go_rl.reasoning import detect_reasoning_profile, strip_reasoning_for_reward
 from go_rl.rewards import evaluate_move, is_legal_coords
+from go_rl.reward_context import RewardPosition, reward_position
 from go_rl.rollout import parse_move_answer
 from go_rl.run_logging import write_run_log
-from go_rl.shared_types import BoardKey, KataGoService, board_key
+from go_rl.shared_types import KataGoService
 from go_rl.training_utils import (
     add_common_training_args,
     configure_torch_for_speed,
@@ -49,18 +50,24 @@ logger = logging.getLogger(__name__)
 
 def _analyze_unique_positions(
     katago: KataGoService,
-    boards_by_key: dict[BoardKey, BoardState],
-) -> dict[BoardKey, KataGoResult]:
+    boards_by_key: dict[tuple, RewardPosition],
+) -> dict[tuple, KataGoResult]:
     if not boards_by_key:
         return {}
-    keys = list(boards_by_key.keys())
-    boards = [boards_by_key[key] for key in keys]
-    analyses = katago.analyze_positions(boards)
-    if len(analyses) != len(keys):
-        raise RuntimeError(
-            f"KataGo returned {len(analyses)} results for {len(keys)} requests."
+    # Batch independently for each rules/komi setting. Never deduplicate values
+    # across different game tasks merely because the stone layout is identical.
+    groups: dict[str, list[tuple[tuple, RewardPosition]]] = {}
+    for key, position in boards_by_key.items():
+        groups.setdefault(key[-1], []).append((key, position))
+    results = {}
+    for group in groups.values():
+        analyses = katago.analyze_positions(
+            [position.board for _, position in group], **group[0][1].analysis_options,
         )
-    return {key: analysis for key, analysis in zip(keys, analyses)}
+        if len(analyses) != len(group):
+            raise RuntimeError(f"KataGo returned {len(analyses)} results for {len(group)} requests.")
+        results.update((key, analysis) for (key, _), analysis in zip(group, analyses))
+    return results
 
 
 def build_reward_fn(
@@ -69,6 +76,8 @@ def build_reward_fn(
     reasoning_cfg: Optional[ReasoningConfig] = None,
     model_name: str = "",
     tokenizer: object | None = None,
+    default_rules: str | dict[str, object] | None = None,
+    default_komi: float | None = None,
 ) -> Callable[..., list[float]]:
     effective_reasoning = reasoning_cfg or ReasoningConfig(enabled=False)
     profile = detect_reasoning_profile(
@@ -85,23 +94,20 @@ def build_reward_fn(
         if len(prompts) != len(completions):
             raise ValueError("Prompts and completions must have matching lengths.")
         rewards: list[float] = []
-        base_requests: dict[BoardKey, BoardState] = {}
-        candidate_requests: dict[BoardKey, BoardState] = {}
+        base_requests: dict[tuple, RewardPosition] = {}
+        candidate_requests: dict[tuple, RewardPosition] = {}
         entries: list[dict[str, object]] = []
 
-        for prompt, completion in zip(prompts, completions):
-            try:
-                board = parse_prompt(prompt)
-            except ValueError:
-                logger.debug("Failed to parse prompt for reward scoring", exc_info=True)
-                entries.append({"prompt_error": True})
-                continue
-
+        for index, (prompt, completion) in enumerate(zip(prompts, completions)):
+            position = reward_position(prompt, kwargs, index, len(prompts), reward_cfg,
+                                       default_rules, default_komi)
+            board = position.board
+            effective_reward_cfg = position.reward_config
             player = board.next_player()
-            key = board_key(board)
-            base_requests.setdefault(key, board)
+            key = position.key()
+            base_requests.setdefault(key, position)
             entry: dict[str, object] = {
-                "prompt_error": False,
+                "reward_config": effective_reward_cfg,
                 "board": board,
                 "player": player,
                 "base_key": key,
@@ -122,7 +128,7 @@ def build_reward_fn(
                 logger.debug("Invalid move coords: %r", move, exc_info=True)
                 entries.append(entry)
                 continue
-            if not is_legal_coords(board, player, coords, reward_cfg):
+            if not is_legal_coords(board, player, coords, effective_reward_cfg):
                 entries.append(entry)
                 continue
 
@@ -133,8 +139,9 @@ def build_reward_fn(
                 entry["reward_move"] = ""  # Suicide must be penalized, not crash training.
                 entries.append(entry)
                 continue
-            cand_key = (key, move)
-            candidate_requests.setdefault(cand_key, candidate)
+            candidate_position = RewardPosition(candidate, effective_reward_cfg, position.analysis_options)
+            cand_key = candidate_position.key()
+            candidate_requests.setdefault(cand_key, candidate_position)
             entry["candidate_key"] = cand_key
             entries.append(entry)
 
@@ -142,9 +149,6 @@ def build_reward_fn(
         candidate_cache = _analyze_unique_positions(katago, candidate_requests)
 
         for entry in entries:
-            if bool(entry.get("prompt_error")):
-                rewards.append(float(reward_cfg.illegal_penalty))
-                continue
             board = entry["board"]
             player = str(entry["player"])
             move = str(entry["reward_move"])
@@ -155,7 +159,7 @@ def build_reward_fn(
                 delta = candidate_cache[candidate_key].winrate - base_cache[entry["base_key"]].winrate
                 if player == "W":
                     delta = -delta
-            breakdown = evaluate_move(board, move, delta, reward_cfg, player=player)
+            breakdown = evaluate_move(board, move, delta, entry["reward_config"], player=player)
             rewards.append(breakdown.total)
         return rewards
 
@@ -179,11 +183,18 @@ def main() -> None:
     katago_cfg = KataGoConfig(config_base_dir=config_base_dir, **cfg["katago"])
     reward_cfg = RewardConfig(**cfg["reward"])
     rollout_cfg = RolloutConfig(**cfg["rollout"])
+    objective_cfg = GRPOObjectiveConfig(**(cfg.get("grpo") or {}))
+    if rollout_cfg.num_samples < 2:
+        raise ValueError("GRPO requires rollout.num_samples >= 2.")
     dataset_path = os.path.expanduser(os.path.expandvars(cfg["dataset"]))
     logger.debug("Training config: %s", asdict(train_cfg))
     logger.debug("KataGo config: %s", asdict(katago_cfg))
     logger.debug("Reward config: %s", asdict(reward_cfg))
     logger.debug("Rollout config: %s", asdict(rollout_cfg))
+    logger.info("GRPO objective: %s", asdict(objective_cfg))
+    if rollout_cfg.top_p != 1.0 or rollout_cfg.top_k != 0:
+        logger.warning("Truncated sampling differs from the temperature-softmax policy "
+                       "used for log probabilities; prefer top_p=1 and top_k=0 for RL.")
     logger.debug("Dataset path: %s", dataset_path)
 
     try:
@@ -222,6 +233,7 @@ def main() -> None:
         "num_samples": rollout_cfg.num_samples,
         "temperature": rollout_cfg.temperature,
         "reward_config": asdict(reward_cfg),
+        "grpo_objective": asdict(objective_cfg),
     }
     wandb_tags = ["grpo", "rl", quant_type]
     if args.enable_compile:
@@ -253,7 +265,9 @@ def main() -> None:
     dataset = dataset.map(
         render_training_prompt,
         fn_kwargs={"tokenizer": tokenizer, "reasoning_cfg": train_cfg.reasoning,
-                   "model_name": train_cfg.model_name},
+                   "model_name": train_cfg.model_name,
+                   "input_encoding": train_cfg.input_encoding,
+                   "rules": katago_cfg.rules, "komi": katago_cfg.komi},
     )
     logger.info("Dataset rows: %d", len(dataset))
 
@@ -280,6 +294,7 @@ def main() -> None:
                 "katago": asdict(katago_cfg),
                 "reward": asdict(reward_cfg),
                 "rollout": asdict(rollout_cfg),
+                "grpo": asdict(objective_cfg),
                 "dataset": dataset_path,
             },
             extra={
@@ -307,6 +322,7 @@ def main() -> None:
             "num_generations": rollout_cfg.num_samples,
             "temperature": rollout_cfg.temperature,
             "top_p": rollout_cfg.top_p,
+            "top_k": rollout_cfg.top_k,
             "max_completion_length": rollout_cfg.max_tokens,
             "logging_steps": 1 if args.smoke else 10,
             "dataloader_num_workers": num_workers,
@@ -315,6 +331,7 @@ def main() -> None:
             "report_to": [],
             "torch_compile": args.enable_compile,
             **precision_kwargs(train_cfg.quantization_bits),
+            **asdict(objective_cfg),
         }
         max_steps = 1 if args.smoke else train_cfg.num_steps
         trainer_args["max_steps"] = max_steps if max_steps > 0 else -1
@@ -337,6 +354,7 @@ def main() -> None:
                 reasoning_cfg=train_cfg.reasoning,
                 model_name=train_cfg.model_name,
                 tokenizer=tokenizer,
+                default_rules=katago_cfg.rules, default_komi=katago_cfg.komi,
             ),
             train_dataset=dataset,
             args=GRPOConfig(**trainer_args),

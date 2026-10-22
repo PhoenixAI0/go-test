@@ -4,9 +4,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import List
-
-from go_rl.data_prep import run_go_parser, write_jsonl_batch
+from go_rl.data_prep import run_go_parser, prepare_dataset_files
 from go_rl.logging_utils import setup_logging
 from venv_utils import ensure_virtualenv
 
@@ -20,6 +18,13 @@ def main() -> None:
     parser.add_argument("--output-dir", default="data", help="Output directory for datasets")
     parser.add_argument("--tag", default="9x9", help="Tag for output filenames")
     parser.add_argument("--max-positions", type=int, default=200000, help="Maximum positions to collect")
+    parser.add_argument("--positions-per-game", type=int, default=64,
+                        help="Uniform positions per game (0 = all); avoids opening-only subsets")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--eval-ratio", type=float, default=0.05,
+                        help="Fraction of whole games reserved from both SFT and RL")
+    parser.add_argument("--symmetries", type=int, choices=[1, 8], default=1,
+                        help="D4 augmentation of training records after the split")
     parser.add_argument(
         "--num-workers",
         type=int,
@@ -30,7 +35,7 @@ def main() -> None:
         "--batch-size",
         type=int,
         default=1000,
-        help="Batch size for buffered writes",
+        help="Deprecated compatibility option; writes now stream in bounded memory",
     )
     parser.add_argument(
         "--log-level",
@@ -44,15 +49,7 @@ def main() -> None:
     logger.debug("Batch size: %d", args.batch_size)
 
     output_root = Path(args.output_dir)
-    sft_path = output_root / f"sft_{args.tag}.jsonl"
-    rl_path = output_root / f"rl_prompts_{args.tag}.jsonl"
-
-    sft_path.parent.mkdir(parents=True, exist_ok=True)
-    rl_path.parent.mkdir(parents=True, exist_ok=True)
-
-    count = 0
-    sft_batch: List[dict] = []
-    rl_batch: List[dict] = []
+    output_root.mkdir(parents=True, exist_ok=True)
 
     go_parser_output = output_root / f"__go_parser_{args.tag}.jsonl"
     logger.info("Building intermediate dataset with Go parser")
@@ -61,47 +58,18 @@ def main() -> None:
         output_path=str(go_parser_output),
         max_positions=args.max_positions,
         num_workers=args.num_workers,
+        seed=args.seed,
+        positions_per_game=args.positions_per_game,
     )
-
-    with (
-        sft_path.open("w", encoding="utf-8", buffering=8192 * 16) as sft_handle,
-        rl_path.open("w", encoding="utf-8", buffering=8192 * 16) as rl_handle,
-    ):
-        logger.info("Processing Go parser output: %s", go_parser_output)
-        with go_parser_output.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                sample = json.loads(line)
-                sft_record = {
-                    "prompt": sample["prompt"],
-                    "response": sample["response"],
-                    "board_size": sample.get("board_size"),
-                }
-                rl_record = {"prompt": sample["prompt"]}
-
-                sft_batch.append(sft_record)
-                rl_batch.append(rl_record)
-                count += 1
-
-                if len(sft_batch) >= args.batch_size:
-                    write_jsonl_batch(sft_handle, sft_batch)
-                    write_jsonl_batch(rl_handle, rl_batch)
-                    sft_batch = []
-                    rl_batch = []
-
-                    if count % 10000 == 0:
-                        logger.info("Written %d samples...", count)
-
-        if sft_batch:
-            write_jsonl_batch(sft_handle, sft_batch)
-            write_jsonl_batch(rl_handle, rl_batch)
+    report = prepare_dataset_files(
+        go_parser_output, output_root, args.tag, eval_ratio=args.eval_ratio,
+        seed=args.seed, symmetries=args.symmetries,
+    )
 
     if go_parser_output.exists():
         go_parser_output.unlink()
 
-    logger.info("Wrote %d SFT samples to %s", count, sft_path)
-    logger.info("Wrote %d RL prompts to %s", count, rl_path)
+    logger.info("Dataset manifest: %s", json.dumps(report, sort_keys=True))
 
 
 if __name__ == "__main__":
