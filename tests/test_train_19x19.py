@@ -87,6 +87,8 @@ def test_stage_commands_preserve_rules_and_handoff_checkpoints(tmp_path):
     assert quality["--policy-checkpoint"] == "policy=" + str(tmp_path / "run/selfplay")
     model_command = shlex.split(match["model"]["command"])
     assert model_command[model_command.index("--checkpoint") + 1] == str(tmp_path / "run/selfplay")
+    assert "--num-beams" not in model_command
+    assert "--text-beam-widths" not in quality
     assert match["max_moves"] == 1083
 
 
@@ -110,6 +112,38 @@ def test_text_recipe_uses_text_training_evaluation_and_gtp(tmp_path):
     command = shlex.split(match["model"]["command"])
     assert "--model" in command and "--checkpoint" not in command
     assert command[command.index("--encoding") + 1] == "grid"
+    assert options(stages[1])["--text-beam-widths"] == "1"
+    assert command[command.index("--num-beams") + 1] == "1"
+
+
+def test_pilot_uses_frozen_labels_selected_training_and_fixed_text_beam(tmp_path):
+    recipe = recipe_module.load_recipe(arguments(
+        tmp_path, config=str(ROOT / "config/policy_19x19_qwen06_pilot.yaml"), evaluate=True))
+    stages, match = recipe_module.build_plan(recipe)
+    assert [stage["name"] for stage in stages] == ["distill", "move_quality", "matches"]
+    training, quality = options(stages[0]), options(stages[1])
+    assert training["--train-data"] == str(ROOT / "data/teacher_v4_visits64.jsonl")
+    assert training["--eval-data"] == str(ROOT / "data/teacher_19x19_val_v3.jsonl")
+    assert (training["--steps"], training["--batch-size"], training["--gradient-accumulation"]) == ("120", "4", "1")
+    assert training["--eval-every"] == "60" and training["--symmetries"] == "8"
+    assert training["--encoding"] == "compact" and float(training["--learning-rate"]) == 1e-4
+    assert quality["--text-beam-widths"] == "4"
+    model_command = shlex.split(match["model"]["command"])
+    assert model_command[model_command.index("--num-beams") + 1] == "4"
+    assert "--num-beams" not in training and "--text-beam-widths" not in training
+
+
+def test_missing_beam_setting_preserves_greedy_default(tmp_path):
+    raw = yaml.safe_load((ROOT / "config/policy_19x19_qwen06_pilot.yaml").read_text())
+    raw["evaluation"].pop("text_num_beams")
+    path = tmp_path / "old_recipe.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    recipe = recipe_module.load_recipe(arguments(tmp_path, config=str(path), evaluate=True))
+    stages, match = recipe_module.build_plan(recipe)
+    assert recipe["evaluation"]["text_num_beams"] == 1
+    assert options(stages[1])["--text-beam-widths"] == "1"
+    command = shlex.split(match["model"]["command"])
+    assert command[command.index("--num-beams") + 1] == "1"
 
 
 def test_text_model_cannot_silently_enter_categorical_ppo(tmp_path):
@@ -184,6 +218,8 @@ def test_resume_preflight_requires_and_fingerprints_training_state(tmp_path):
     ("training", "batch_size", 0), ("training", "learning_rate", float("nan")),
     ("categorical_training", "readout", "unknown"), ("categorical_training", "value_weight", -1),
     ("text_training", "encoding", "cells"), ("text_training", "generation_positions", 0),
+    ("evaluation", "text_num_beams", 0), ("evaluation", "text_num_beams", -1),
+    ("evaluation", "text_num_beams", True), ("evaluation", "text_num_beams", 1.5),
 ])
 def test_invalid_training_configuration_fails_before_execution(tmp_path, section, field, value):
     raw = yaml.safe_load((ROOT / "config/policy_19x19_qwen06.yaml").read_text())

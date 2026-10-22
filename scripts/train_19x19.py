@@ -48,6 +48,7 @@ def load_recipe(args) -> dict:
     if not isinstance(recipe, dict):
         raise ValueError("Recipe must be a YAML mapping")
     recipe = deepcopy(recipe)
+    recipe["evaluation"].setdefault("text_num_beams", 1)
     for section in ("selfplay", "evaluation"):
         if not isinstance(recipe[section]["enabled"], bool):
             raise ValueError(f"{section}.enabled must be true or false")
@@ -114,7 +115,7 @@ def load_recipe(args) -> dict:
                      "lora_rank", "max_seq_length"),
         "text_training": ("generation_positions", "max_new_tokens"),
         "selfplay": ("updates", "episodes_per_update", "max_plies", "minibatch_size", "ppo_epochs"),
-        "evaluation": ("max_positions", "max_visits", "num_games", "max_moves"),
+        "evaluation": ("max_positions", "max_visits", "num_games", "max_moves", "text_num_beams"),
     }.items():
         for field in fields:
             value = recipe[section][field]
@@ -220,7 +221,8 @@ def build_plan(recipe: dict) -> tuple[list[dict], dict | None]:
     if recipe["evaluation"]["enabled"]:
         evaluation = recipe["evaluation"]
         model_options = ({"text_model": "policy=" + checkpoint, "encoding": settings["encoding"],
-                          "revision": recipe["revision"], "max_new_tokens": settings["max_new_tokens"]}
+                          "revision": recipe["revision"], "max_new_tokens": settings["max_new_tokens"],
+                          "text_beam_widths": evaluation["text_num_beams"]}
                          if model_kind == "text" else {"policy_checkpoint": "policy=" + checkpoint})
         stages.append({"name": "move_quality", "argv": command(
             "eval_move_quality.py", dataset=eval_data, train_data=train_data,
@@ -230,7 +232,8 @@ def build_plan(recipe: dict) -> tuple[list[dict], dict | None]:
             katago_model=engine["model"], katago_config=engine["eval_config"],
         )})
         gtp_options = ({"model": checkpoint, "encoding": settings["encoding"],
-                        "revision": recipe["revision"], "max_new_tokens": settings["max_new_tokens"]}
+                        "revision": recipe["revision"], "max_new_tokens": settings["max_new_tokens"],
+                        "num_beams": evaluation["text_num_beams"]}
                        if model_kind == "text" else {"checkpoint": checkpoint})
         model_command = command("model_gtp.py", **gtp_options, device=recipe["device"],
                                 board_size=19, rules=recipe["rules"], komi=recipe["komi"], seed=recipe["seed"])

@@ -87,8 +87,30 @@ rejects histories incompatible with the requested rules, and reanalyzes under a
 fixed target: **positional superko, area scoring, no suicide, komi 7.5**. Source
 outcomes are retained as provenance, not reused as labels for that new objective.
 The named KataGo ruleset `chinese` uses simple ko and is not an alias for this target.
+Direct text/categorical trainers now reject area-game histories at or beyond two
+consecutive passes. Filter older v1/v2 teacher artifacts into fresh files with
+[filter_terminal_positions.py](scripts/filter_terminal_positions.py), or regenerate
+their labels; keep the original artifacts unchanged.
 
 ## Direct training recipe
+
+The [bounded pilot](config/policy_19x19_qwen06_pilot.yaml) exposes the current
+development selection: existing v4 labels at 64 teacher visits, compact text,
+eight D4 transforms, 120 updates at learning rate 1e-4, and beam width 4 for
+evaluation. It requires the local generated v4/validation-v3 files, or replacement
+paths supplied with `--train-data` and `--eval-data`. This is a reproducible pilot,
+not evidence of an optimal long-run budget or established strategic improvement.
+
+```bash
+uv run --locked python scripts/train_19x19.py \
+  --config config/policy_19x19_qwen06_pilot.yaml --dry-run
+# Remove --dry-run to train; add --evaluate for move diagnostics and paired games.
+```
+
+`evaluation.text_num_beams` controls both text move-quality evaluation and the
+text GTP engine; omitted values retain greedy beam width 1. It does not change
+training or categorical policies. The larger recipe below keeps its conservative
+starting settings.
 
 Inspect [config/policy_19x19_qwen06.yaml](config/policy_19x19_qwen06.yaml), then print
 the exact commands. Dry-run loads no models, starts no engines, and writes nothing:

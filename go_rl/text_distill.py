@@ -14,6 +14,7 @@ from torch.nn import functional as F
 from .data_prep import board_from_example
 from .model_interface import choose_device, inference_dtype, render_position
 from .rules import legality_superko, normalize_rules
+from .teacher_data import validate_history_for_rules
 
 
 @dataclass
@@ -47,6 +48,9 @@ def prepare_text_record(
 ) -> dict[str, Any]:
     """Use exactly the non-thinking generation prefix consumed at inference."""
     board = board_from_example(record)
+    if normalize_rules(record["rules"])["scoring"] == "AREA" and board.has_two_pass_history():
+        raise ValueError("Area-scoring training positions must precede two-pass termination; filter or regenerate the dataset")
+    validate_history_for_rules(board, record["rules"])
     if record["response"] not in board.legal_moves(superko=legality_superko(record["rules"])):
         raise ValueError("Supervised move is illegal under the declared rules")
     prompt = render_position(board, encoding, komi=float(record["komi"]), rules=record["rules"])

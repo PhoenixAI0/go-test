@@ -20,7 +20,8 @@ from go_rl.policy_model import (
     collate_policy_inputs, create_policy_model, encode_policy_position,
     load_policy_model, policy_value_loss, save_policy_model,
 )
-from go_rl.rules import legality_superko
+from go_rl.rules import legality_superko, normalize_rules
+from go_rl.teacher_data import validate_history_for_rules
 from go_rl.training_checkpoint import (
     preserve_best_snapshot, restore_best_snapshot, restore_training_state, save_training_state,
 )
@@ -34,6 +35,9 @@ def prepare_records(records: list[dict], tokenizer, encoding: str, target: str,
         if board.size != board_size:
             raise ValueError("All records must match the checkpoint board size")
         rules, komi = record["rules"], float(record["komi"])
+        if normalize_rules(rules)["scoring"] == "AREA" and board.has_two_pass_history():
+            raise ValueError("Area-scoring training positions must precede two-pass termination; filter or regenerate the dataset")
+        validate_history_for_rules(board, rules)
         legal = legal_action_mask(board, superko=legality_superko(rules))
         if "legal_mask" in record and record["legal_mask"] != legal:
             raise ValueError("Stored teacher legality differs from reconstructed state/rules")
