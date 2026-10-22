@@ -191,6 +191,22 @@ def test_preflight_reuses_teacher_data_without_katago_and_rejects_game_leakage(t
     assert not Path(recipe["output_dir"]).exists()
 
 
+@pytest.mark.parametrize("source,split", [
+    ("train_data", "test"), ("train_data", "validation"), ("train_data", None),
+    ("eval_data", "test"), ("eval_data", "train"), ("eval_data", None),
+])
+def test_recipe_requires_pinned_training_roles_without_optional_evaluation(tmp_path, source, split):
+    recipe = reuse_recipe(tmp_path)
+    assert recipe["evaluation"]["enabled"] is False
+    path = Path(recipe[source])
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows[0]["split"] = split
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    with pytest.raises(ValueError, match=source + " requires explicit"):
+        recipe_module.preflight(recipe)
+    assert not Path(recipe["output_dir"]).exists()
+
+
 def test_preflight_rejects_wrong_objective_and_reused_output(tmp_path):
     recipe = reuse_recipe(tmp_path)
     recipe["komi"] = 6.5

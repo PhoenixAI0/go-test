@@ -308,8 +308,9 @@ def preflight(recipe: dict) -> dict[str, str]:
             raise ValueError(f"{name} contains no records")
         if name == "dataset" and not {"train", "validation"}.issubset(splits):
             raise ValueError("dataset needs game-separated train and validation split metadata")
-        if name == "eval_data" and recipe["evaluation"]["enabled"] and splits != {"validation"}:
-            raise ValueError("Optional evaluation requires validation split metadata in eval_data")
+        expected_split = {"train_data": "train", "eval_data": "validation"}.get(name)
+        if expected_split is not None and splits != {expected_split}:
+            raise ValueError(f"{name} requires explicit {expected_split} split metadata on every record")
     for source in ("resume_from", "init_checkpoint"):
         if recipe.get(source):
             path = Path(recipe[source])

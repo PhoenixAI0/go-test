@@ -120,7 +120,7 @@ def main() -> None:
     if output.exists() and any(output.iterdir()):
         parser.error("Output directory is nonempty; use a fresh experiment path")
     train_records, eval_records = IndexedJsonlRecords(args.train_data), IndexedJsonlRecords(args.eval_data)
-    validate_splits(train_records, eval_records)
+    validate_splits(train_records, eval_records, allow_test=False)
     objective_metadata = uniform_objective_metadata(chain(train_records, eval_records))
     source_train_positions = len(train_records)
     output.mkdir(parents=True, exist_ok=True)

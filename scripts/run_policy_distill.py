@@ -165,7 +165,7 @@ def main() -> None:
         torch.cuda.manual_seed_all(args.seed)
     device = choose_device(args.device)
     train_records, eval_records = IndexedJsonlRecords(args.train_data), IndexedJsonlRecords(args.eval_data)
-    validate_splits(train_records, eval_records)
+    validate_splits(train_records, eval_records, allow_test=False)
     source_train_positions = len(train_records)
     if args.init_checkpoint or args.resume_from:
         model, tokenizer, metadata = load_policy_model(args.resume_from or args.init_checkpoint, device, trainable=True)

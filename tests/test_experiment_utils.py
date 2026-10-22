@@ -81,3 +81,15 @@ def test_pinned_partitions_and_unpinned_legacy_records_are_accepted(train_split,
     train["split"] = train_split
     validation.update(komi=6.5, split=eval_split)
     validate_splits([train], [validation])
+
+
+@pytest.mark.parametrize("eval_split", [None, "", "validation", "test"])
+def test_checkpoint_selection_excludes_final_test_but_preserves_unpinned_legacy(eval_split):
+    train, validation = _record("train"), _record("validation")
+    validation.update(komi=6.5, split=eval_split)
+    if eval_split == "test":
+        with pytest.raises(ValueError, match="Evaluation.*pinned.*test"):
+            validate_splits([train], [validation], allow_test=False)
+        validate_splits([train], [validation])  # Standalone final evaluation remains supported.
+    else:
+        validate_splits([train], [validation], allow_test=False)

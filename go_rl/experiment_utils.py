@@ -138,11 +138,17 @@ def state_identity(record: Mapping[str, Any]) -> str:
     return json.dumps([size, min(variants), board.next_player(), normalize_rules(record["rules"]), komi], sort_keys=True)
 
 
-def validate_splits(train: Sequence[Mapping[str, Any]], validation: Sequence[Mapping[str, Any]]) -> None:
+def validate_splits(train: Sequence[Mapping[str, Any]], validation: Sequence[Mapping[str, Any]], *,
+                    allow_test: bool = True) -> None:
+    """Check isolation; training-time checkpoint selection must set allow_test=False.
+
+    Unpinned legacy records remain accepted. Explicit final-test rows are valid
+    for standalone evaluation, but must not select training checkpoints.
+    """
     if not train or not validation:
         raise ValueError("Both training and validation need at least one record")
     for partition, rows, allowed in (("Training", train, {"train"}),
-                                      ("Evaluation", validation, {"validation", "test"})):
+                                      ("Evaluation", validation, {"validation", "test"} if allow_test else {"validation"})):
         for row in rows:
             pinned = row.get("split")
             if pinned is not None and pinned != "" and (not isinstance(pinned, str) or pinned not in allowed):

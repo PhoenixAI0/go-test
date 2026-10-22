@@ -51,6 +51,27 @@ def _record(game: str, moves: list[str], response: str, split: str) -> dict:
 
 
 @pytest.mark.parametrize("kind", ["policy", "text"])
+def test_direct_distillation_rejects_final_test_before_loading_model(tmp_path, monkeypatch, kind):
+    train_path, eval_path = tmp_path / "train.jsonl", tmp_path / "test.jsonl"
+    train_path.write_text(json.dumps(_record("train", ["D4", "Q16"], "Q4", "train")) + "\n")
+    eval_path.write_text(json.dumps(_record("final", ["K10", "J11"], "D4", "test")) + "\n")
+    script = Path(__file__).resolve().parents[1] / f"scripts/run_{kind}_distill.py"
+    spec = importlib.util.spec_from_file_location(f"{kind}_distill_role_test", script)
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+
+    def no_model_load(*args, **kwargs):
+        raise AssertionError("A final-test validation source must fail before model loading")
+
+    monkeypatch.setattr(runner, f"create_{kind}_model", no_model_load)
+    monkeypatch.setattr(sys, "argv", [str(script), "--train-data", str(train_path),
+                                     "--eval-data", str(eval_path), "--device", "cpu",
+                                     "--output-dir", str(tmp_path / "run")])
+    with pytest.raises(ValueError, match="Evaluation.*pinned.*test"):
+        runner.main()
+
+
+@pytest.mark.parametrize("kind", ["policy", "text"])
 @pytest.mark.parametrize("symmetries", [1, 8])
 def test_actual_distillation_cli_resume_matches_uninterrupted_weights(tmp_path, monkeypatch, kind, symmetries):
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
